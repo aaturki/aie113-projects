@@ -15,14 +15,19 @@ dependencies = [
     "numpy==2.5.5",
     "pandas==3.1.1",
     "joblib==1.6.0",
-    "pydantic>=2.7,<3",
-    "pydantic-settings>=2.3",
-    "fastapi[standard]>=0.115",
-    "structlog>=24.1",
+    # The web service: plain FastAPI and uvicorn, without the [standard] extras (cloud CLI,
+    # telemetry) that a small service does not need and an image would carry for nothing.
+    "fastapi==0.165.0",
+    "uvicorn==0.54.0",
+    "pydantic==2.14.4",
+    "pydantic-settings==2.16.3",
+    "structlog==26.1.0",
+    "tzdata==2026.6",          # time zones on every machine, Windows included
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov", "httpx", "ruff", "mypy", "import-linter", "pre-commit"]
+dev = ["pytest==9.2.0", "pytest-cov==7.1.0", "httpx==0.28.1", "ruff==0.17.6", "mypy==2.4.1",
+       "import-linter==2.17", "pre-commit>=4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,6 +57,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PT", "RUF", "N", "S", "RE
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]            # tests assert
 "src/fraud_alerts/training/*" = ["S310"]   # downloads from one fixed https address
+"scripts/smoke.py" = ["S310"]              # calls the service address it is given
 
 [tool.mypy]
 python_version = "3.12"
@@ -79,3 +85,15 @@ type = "forbidden"
 source_modules = ["fraud_alerts.domain", "fraud_alerts.service", "fraud_alerts.api"]
 forbidden_modules = ["sklearn", "joblib", "pandas", "numpy"]
 allow_indirect_imports = true    # api reaches the adapter only in the composition root
+
+[[tool.importlinter.contracts]]
+name = "The rules and the use case know nothing of the web, the logs or the settings"
+type = "forbidden"
+source_modules = ["fraud_alerts.domain", "fraud_alerts.service"]
+forbidden_modules = ["fastapi", "starlette", "uvicorn", "structlog", "fraud_alerts.config"]
+
+[[tool.importlinter.contracts]]
+name = "Adapters get their settings handed in, and know nothing of the web"
+type = "forbidden"
+source_modules = ["fraud_alerts.adapters"]
+forbidden_modules = ["fastapi", "starlette", "uvicorn", "fraud_alerts.config"]

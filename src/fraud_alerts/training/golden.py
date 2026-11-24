@@ -37,8 +37,7 @@ def close(ours: float, notebook: float, tolerance: float) -> bool:
 
 
 def as_payment(raw: Mapping[str, float]) -> Payment:
-    return Payment(time=raw["Time"], amount=raw["Amount"],
-                   v=tuple(raw[name] for name in V_INPUTS))
+    return Payment.from_dataset(raw["Time"], raw["Amount"], [raw[name] for name in V_INPUTS])
 
 
 def table_checks(table: Sequence[Mapping[str, float]], threshold: float,

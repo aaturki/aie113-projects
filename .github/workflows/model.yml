@@ -32,6 +32,30 @@ jobs:
       - run: pip install -e .
       - name: Train as the notebook does, then check against the notebook's answers
         run: python -m fraud_alerts.training.train
+      - name: A typical payment, from the model's own typical values (made once, then kept)
+        run: |
+          [ -f payloads/typical.json ] || python - <<'EOF'
+          import json
+          typical = json.load(open("artifacts/model_info.json"))["typical_values"]
+          body = {"timestamp": f"2026-11-24T{int(typical['hour']):02d}:30:00+03:00",
+                  "Amount": round(typical["Amount"], 2),
+                  **{f"V{i}": typical[f"V{i}"] for i in range(1, 29)}}
+          json.dump(body, open("payloads/typical.json", "w"), indent=1)
+          print(json.dumps(body))
+          EOF
+      - name: Start the service on the model just trained, and try it
+        run: |
+          uvicorn fraud_alerts.api.app:create_app --factory --port 8000 --no-access-log \
+            > service.log 2>&1 &
+          python scripts/smoke.py http://127.0.0.1:8000 || { cat service.log; exit 1; }
+          echo "--- the service's log"
+          cat service.log
+          echo "--- nothing the client sent may be in the log"
+          if grep -E '1504\.93|4111111111111111|-6\.1061832734711' service.log; then
+            echo "::error::A payment value or a card-like field name reached the log."
+            exit 1
+          fi
+          echo "no payment values and no card-like field name in the log"
       - name: Keep the model and its facts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
