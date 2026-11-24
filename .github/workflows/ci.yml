@@ -34,6 +34,35 @@ jobs:
             ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             git /repo --redact --no-banner --verbose --exit-code 1
 
+  pre-commit:
+    # The checks every developer runs before each commit, kept honest here: a skipped or
+    # broken hook on a laptop cannot hide.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - run: pip install pre-commit==4.7.0
+      - name: Every hook passes on the whole repository
+        run: pre-commit run --all-files --show-diff-on-failure
+      - name: The drill, automated - the secret hook must stop a fake token before any commit
+        run: |
+          # A random token in GitHub's own format: made here, never committed, never printed.
+          printf 'FRAUD_ALERT_WEBHOOK_TOKEN=ghp_%s\n' "$(openssl rand -hex 18)" > drill.env
+          git add drill.env
+          if pre-commit run gitleaks > drill.log 2>&1; then
+            cat drill.log
+            echo "::error::The pre-commit secret scan let a GitHub token through."
+            exit 1
+          fi
+          cat drill.log                       # gitleaks shows it REDACTED
+          grep -q 'github-pat' drill.log      # stopped, and for the right reason
+          echo "The secret hook stopped the fake token before it could be committed."
+          git rm --cached --quiet drill.env
+          rm drill.env drill.log
+
   lint:
     # Style and simple mistakes, types at every seam, and the layer rules. Seconds.
     runs-on: ubuntu-latest
@@ -149,6 +178,8 @@ jobs:
     needs: model
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      COMPOSE: docker compose -f compose.yaml -f compose.smoke.yaml
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: The model the model job made and checked
@@ -183,14 +214,39 @@ jobs:
           echo "first build ${BUILD_MS} ms; rebuild after a one-line change ${ms} ms" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- src/fraud_alerts/api/app.py
+      - name: A practice webhook token for this run only, handed over as a file
+        run: |
+          # Made here, never committed, never printed, gone with the runner. add-mask hides it
+          # in this run's log even if a step ever echoed it by mistake.
+          token="practice_$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          file="$RUNNER_TEMP/fraud_alert_webhook_token"
+          ( umask 077; printf '%s' "$token" > "$file" )
+          sudo chown 10001:10001 "$file"      # readable by the service's user only
+          echo "ALERT_TOKEN_FILE=$file" >> "$GITHUB_ENV"
       - name: One command starts it; wait until the container reports healthy
         run: |
           start=$(date +%s)
-          docker compose up --no-build --detach --wait --wait-timeout 90
+          $COMPOSE up --no-build --detach --wait --wait-timeout 90
           echo "healthy after $(( $(date +%s) - start )) s"
-          docker compose ps
-      - name: Smoke test through the container
-        run: python3 scripts/smoke.py http://127.0.0.1:8000
+          $COMPOSE ps
+      - name: Smoke test through the container, with the pretend fraud team
+        run: python3 scripts/smoke.py http://127.0.0.1:8000 --fraud-team http://127.0.0.1:8080
+      - name: The token reached the service and the fraud team, and nowhere else
+        run: |
+          $COMPOSE logs --no-color > containers.log
+          if sudo grep -F -q -f "$ALERT_TOKEN_FILE" containers.log; then
+            echo "::error::The webhook token is in a container's log."
+            exit 1
+          fi
+          echo "not in any container's log"
+          if $COMPOSE exec -T fraud-alerts env | sudo grep -F -q -f "$ALERT_TOKEN_FILE"; then
+            echo "::error::The webhook token is in an environment variable."
+            exit 1
+          fi
+          echo "not in any environment variable: the service reads it from its secret file"
+          docker run --rm --entrypoint sh fraud-alerts:dev -c 'test ! -e /run/secrets' \
+            && echo "not in the image: a container started without the secret has no secret file"
       - name: Known vulnerabilities and secrets in the image (HIGH or CRITICAL with a fix fails)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -203,10 +259,10 @@ jobs:
           format: table
       - name: Not root, no extra tools, no secrets, cannot change its own files
         run: |
-          echo "runs as: $(docker compose exec -T fraud-alerts id)"
-          docker compose exec -T fraud-alerts sh -c '! command -v pip && ! command -v curl' \
+          echo "runs as: $($COMPOSE exec -T fraud-alerts id)"
+          $COMPOSE exec -T fraud-alerts sh -c '! command -v pip && ! command -v curl' \
             && echo "no pip and no curl inside"
-          docker compose exec -T fraud-alerts ls /app /app/artifacts
+          $COMPOSE exec -T fraud-alerts ls /app /app/artifacts
           # Whatever WE add to the environment must hold no secret. The base image's own
           # variables are public and fixed by its digest (GPG_KEY among them: the public
           # fingerprint of the key that signs Python's releases), so they are compared away.
@@ -214,24 +270,26 @@ jobs:
           docker pull --quiet "$base" > /dev/null
           docker image inspect "$base" --format '{{range .Config.Env}}{{println .}}{{end}}' \
             | sort > base.env
-          docker compose exec -T fraud-alerts env | sort > ours.env
+          $COMPOSE exec -T fraud-alerts env | sort > ours.env
           echo "variables the image adds or changes: $(comm -13 base.env ours.env | cut -d= -f1 | xargs)"
           if comm -13 base.env ours.env | grep -i -E 'token|secret|password|key='; then
             echo "::error::A secret-like variable is inside the container."
             exit 1
           fi
           echo "no secret-like variable added inside"
-          if docker compose exec -T fraud-alerts sh -c 'touch /app/src/x' 2>/dev/null; then
+          if $COMPOSE exec -T fraud-alerts sh -c 'touch /app/src/x' 2>/dev/null; then
             echo "::error::The service can change its own files."
             exit 1
           fi
           echo "its own files are read-only"
-      - name: The container's log
+      - name: The containers' logs
         if: always()
-        run: docker compose logs --no-color
-      - name: Stop it
+        run: $COMPOSE logs --no-color || true
+      - name: Stop them, and throw the practice token away
         if: always()
-        run: docker compose down
+        run: |
+          $COMPOSE down || true
+          sudo rm -f "$ALERT_TOKEN_FILE"
 
   publish:
     # Delivery: only from main, only after every check passed, never from a pull request.

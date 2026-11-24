@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fraud_alerts.api.app import create_app
 from fraud_alerts.config import Settings
 from fraud_alerts.domain.payment import FEATURES
-from helpers import FakeModel, request_body
+from helpers import FakeModel, FakeNotifier, request_body
 
 pytestmark = pytest.mark.integration
 ANSWER_KEYS = {"score", "decision", "review_threshold", "block_threshold", "hour", "reasons",
@@ -18,8 +18,9 @@ ANSWER_KEYS = {"score", "decision", "review_threshold", "block_threshold", "hour
 
 
 def settings(**changes: Any) -> Settings:
-    return Settings(**({"block_threshold": 0.9, "bank_timezone": "Asia/Riyadh",
-                        "log_level": "INFO"} | changes))
+    """Explicit settings; a developer's own .env file must not change the tests."""
+    return Settings(_env_file=None, **({"block_threshold": 0.9, "bank_timezone": "Asia/Riyadh",
+                                        "log_level": "INFO"} | changes))
 
 
 @pytest.fixture
@@ -173,7 +174,7 @@ def test_health_and_readiness_when_the_model_is_loaded(client: TestClient) -> No
     assert client.get("/v1/health").json() == {"status": "alive"}
     assert client.get("/v1/ready").json() == {
         "status": "ready", "model_version": "fake-1", "review_threshold": 0.4,
-        "block_threshold": 0.9, "bank_timezone": "Asia/Riyadh"}
+        "block_threshold": 0.9, "bank_timezone": "Asia/Riyadh", "alerts_to_fraud_team": False}
 
 
 def test_without_a_model_the_service_is_alive_but_not_ready(tmp_path: Path) -> None:
@@ -196,6 +197,34 @@ def test_the_contract_is_published(client: TestClient) -> None:
     assert client.get("/docs").status_code == 200
     contract = client.get("/openapi.json").json()
     assert {"/v1/assess", "/v1/health", "/v1/ready"} <= set(contract["paths"])
+
+
+# ---------- the fraud team's webhook, and its secret ----------
+
+def test_only_a_blocked_payment_is_announced_and_only_after_the_answer() -> None:
+    notifier = FakeNotifier()
+    with TestClient(create_app(settings(), model=FakeModel(), notifier=notifier)) as client:
+        blocked = assess(client, request_body(V14=-6.0, V10=-4.0), **{"X-Trace-Id": "blk-1"})
+        assess(client, request_body(V14=-6.0))        # reviewed: not announced
+        assess(client, request_body())                # allowed: not announced
+        ready = client.get("/v1/ready").json()
+    assert blocked.json()["decision"] == "block"
+    assert [call["trace_id"] for call in notifier.calls] == ["blk-1"]
+    assert notifier.calls[0]["reasons"] == ["V14", "V10"]
+    assert ready["alerts_to_fraud_team"] is True
+
+
+def test_the_token_reaches_no_log_even_when_the_fraud_team_is_down(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    token = "practice-token-that-must-never-be-logged"   # gitleaks:allow (made up)
+    down = settings(alert_webhook_url="http://127.0.0.1:9/alerts", alert_webhook_token=token)
+    with TestClient(create_app(down, model=FakeModel())) as client:
+        assess(client, request_body(V14=-6.0, V10=-4.0), **{"X-Trace-Id": "down-1"})
+    out = capsys.readouterr().out
+    assert token not in out
+    told = [json.loads(line) for line in out.splitlines()
+            if line.startswith("{") and '"fraud_team_told"' in line]
+    assert [(line["trace_id"], line["reached"]) for line in told] == [("down-1", False)]
 
 
 # ---------- the log ----------

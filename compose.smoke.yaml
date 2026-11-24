@@ -1,0 +1,37 @@
+# Adds a pretend fraud team, and hands the practice webhook token to both services as a secret
+# FILE (it appears inside them as /run/secrets/fraud_alert_webhook_token; it is never an
+# environment variable and never part of an image). Used by the pipeline's smoke test:
+#
+#   printf '%s' "practice_$(openssl rand -hex 24)" > /tmp/alert_token     # a new one each run
+#   ALERT_TOKEN_FILE=/tmp/alert_token \
+#     docker compose -f compose.yaml -f compose.smoke.yaml up --build --wait
+services:
+  fraud-alerts:
+    environment:
+      FRAUD_ALERT_WEBHOOK_URL: http://fraud-team:8080/alerts
+    secrets:
+      - fraud_alert_webhook_token
+    depends_on:
+      fraud-team:
+        condition: service_healthy
+
+  fraud-team:
+    # The same pinned base image as the service: nothing new to trust.
+    image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    command: ["python", "/app/fake_fraud_team.py"]
+    volumes:
+      - ./scripts/fake_fraud_team.py:/app/fake_fraud_team.py:ro
+    secrets:
+      - fraud_alert_webhook_token
+    ports:
+      - "8080:8080"                # so the smoke test can ask what arrived
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+secrets:
+  fraud_alert_webhook_token:
+    file: ${ALERT_TOKEN_FILE:?put the practice token in a file and set ALERT_TOKEN_FILE to it}

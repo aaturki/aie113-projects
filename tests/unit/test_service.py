@@ -4,7 +4,7 @@ import pytest
 from fraud_alerts.domain.payment import Payment
 from fraud_alerts.domain.policy import Decision
 from fraud_alerts.service.alerts import AlertService
-from helpers import FakeModel
+from helpers import FakeModel, FakeNotifier
 
 pytestmark = pytest.mark.unit
 
@@ -46,3 +46,19 @@ def test_the_review_threshold_comes_with_the_model_and_block_from_the_business()
 def test_a_block_threshold_below_the_models_review_threshold_is_refused() -> None:
     with pytest.raises(ValueError, match="thresholds"):
         AlertService(FakeModel(review_threshold=0.4), block_threshold=0.3)
+
+
+def test_only_a_blocked_payment_is_announced_to_the_fraud_team() -> None:
+    notifier = FakeNotifier()
+    service = AlertService(FakeModel(), block_threshold=0.9, notifier=notifier)
+    blocked = service.assess(payment(v14=-6.0, v10=-4.0))
+    assert service.announce(blocked, "t-1") is True
+    assert service.announce(service.assess(payment(v14=-6.0)), "t-2") is None   # reviewed
+    assert service.announce(service.assess(payment()), "t-3") is None           # allowed
+    assert notifier.calls == [{"trace_id": "t-1", "score": blocked.score,
+                               "reasons": ["V14", "V10"], "model_version": "fake-1"}]
+
+
+def test_without_a_fraud_team_nothing_is_announced() -> None:
+    service = AlertService(FakeModel(), block_threshold=0.9)
+    assert service.announce(service.assess(payment(v14=-6.0, v10=-4.0)), "t") is None

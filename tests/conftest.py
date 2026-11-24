@@ -59,6 +59,6 @@ def data(data_file: Path) -> pd.DataFrame:
 @pytest.fixture(scope="module")
 def api(bundle: ModelBundle) -> Iterator[TestClient]:
     """The real service with the real model, as a client sees it."""
-    settings = Settings(block_threshold=0.9, bank_timezone="Asia/Riyadh")
+    settings = Settings(_env_file=None, block_threshold=0.9, bank_timezone="Asia/Riyadh")
     with TestClient(create_app(settings, model=bundle)) as client:
         yield client

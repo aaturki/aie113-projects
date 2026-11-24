@@ -1,12 +1,14 @@
 """Smoke test: is a running service really up, and does it answer as promised?
 
-    python scripts/smoke.py http://localhost:8000
+    python scripts/smoke.py http://localhost:8000 [--fraud-team http://localhost:8080]
 
 It waits for /v1/ready, then sends the payment from the notebook's last cell (it must be
 blocked, with V14 as its top reason), a typical payment if payloads/typical.json exists (it
 must be allowed, with no reasons), and three bad requests (each must get the error shape, and
-never see the values or names it sent echoed back). Standard library only, so it runs against
-the service anywhere: a laptop, a container, the pipeline.
+never see the values or names it sent echoed back). With --fraud-team (the pretend fraud team
+of compose.smoke.yaml), it also checks that the blocked payment, and only it, reached the fraud
+team with the right token. Standard library only, so it runs against the service anywhere: a
+laptop, a container, the pipeline.
 """
 import json
 import sys
@@ -40,22 +42,43 @@ def expect(ok: bool, what: str) -> None:
         failures.append(what)
 
 
-def wait_ready(base: str, seconds: int = 60) -> None:
+def wait_ready(base: str, seconds: int = 60) -> dict[str, Any]:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
             status, _, text = call(base, "/v1/ready")
             if status == 200:
                 print(f"ready: {text}")
-                return
+                ready: dict[str, Any] = json.loads(text)
+                return ready
         except OSError:
             pass
         time.sleep(1)
     sys.exit(f"not ready after {seconds} s")
 
 
-def main(base: str) -> int:
-    wait_ready(base)
+def check_fraud_team(fraud_team: str) -> None:
+    """The blocked payment, and nothing else, reached the fraud team, with the right token."""
+    print("what reached the fraud team:")
+    arrived: list[dict[str, Any]] = []
+    for _ in range(20):                       # the alert is sent just after the answer
+        arrived = json.loads(call(fraud_team, "/received")[2])
+        if arrived:
+            break
+        time.sleep(0.5)
+    print(f"  {arrived}")
+    mine = [alert for alert in arrived if alert.get("trace_id") == "smoke-1"]
+    expect(len(mine) == 1, "the blocked payment, told once")
+    expect(bool(mine) and mine[0]["authorized"] is True, "with the right token")
+    expect(bool(mine) and mine[0]["reasons"][:1] == ["V14"], "with the names of its reasons")
+    expect(len(arrived) == 1, "and nothing else: allowed payments are not announced")
+    expect("1504.93" not in json.dumps(arrived), "with no payment values")
+
+
+def main(base: str, fraud_team: str | None = None) -> int:
+    ready = wait_ready(base)
+    expect(ready.get("alerts_to_fraud_team") is (fraud_team is not None),
+           f"alerts to the fraud team: {'on' if fraud_team else 'off'}")
     flagged = json.loads((PAYLOADS / "flagged.json").read_text(encoding="utf-8"))
 
     print("the notebook's last payment:")
@@ -95,9 +118,17 @@ def main(base: str) -> int:
         expect("1504.93" not in text and "4111111111111111" not in text,
                "echoes nothing it was sent")
 
+    if fraud_team:
+        check_fraud_team(fraud_team)
     print("smoke test passed" if not failures else f"smoke test FAILED: {failures}")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:8000"))
+    arguments = sys.argv[1:]
+    team = None
+    if "--fraud-team" in arguments:
+        at = arguments.index("--fraud-team")
+        team = arguments[at + 1].rstrip("/")
+        del arguments[at:at + 2]
+    sys.exit(main(arguments[0].rstrip("/") if arguments else "http://localhost:8000", team))
