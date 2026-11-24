@@ -49,5 +49,200 @@ fraud. Because fraud is so rare, we judge it by those two questions, never by ac
 
 **Open questions · أسئلة ما زالت مفتوحة**
 - The guide wants allow, review and block. The notebook has one threshold (review). A second,
-  higher threshold for block is a business rule we must choose and justify.
+  higher threshold for block is a business rule we must choose and justify. (Answered in
+  Stage 2: 0.9.)
 - Where does the trained model live, if it may not go into git? (Stage 3.)
+
+---
+
+## Stage 1: Reorganise the notebook · إعادة تنظيم الدفتر
+
+**What we asked the agent · ما طلبناه من الوكيل**
+Propose a structure with one job per folder. Save every answer the notebook printed before
+moving any code, then move the code and prove the new code gives the same answers. Keep the
+data and the model out of git.
+
+**What it built · ما بناه**
+
+```
+src/fraud_alerts/
+  domain/     the words and rules of the problem: a payment and its 30 inputs, the
+              allow / review / block rule, the "what if this input were typical?" reasons
+              rule. Standard library and pydantic only.
+  service/    the use case "assess one payment" (alerts.py), and what it needs from any
+              model (interfaces.py: a version, a review threshold, typical values, scores).
+  adapters/   the tools: model_bundle.py loads the scikit-learn model and its facts. The
+              only serving code that touches joblib, pandas or scikit-learn.
+  training/   the notebook's steps as a script: download, split by time, train, choose the
+              threshold, check the quality gates, save, compare with the notebook.
+golden/       notebook_answers.json: every answer the notebook printed, copied first.
+.github/workflows/model.yml    trains on GitHub's computer and runs the comparison.
+```
+
+- Import directions, checked by a tool (import-linter) on every run: api → adapters →
+  service → domain, never backwards. `training/` sits outside the layers, as the notebook did.
+- Where things live:
+  - the data: `data/`, downloaded by `training/data.py` and ignored by git;
+  - the rules: `domain/`;
+  - the model: `artifacts/`, made by `training/train.py`, loaded by
+    `adapters/model_bundle.py`, ignored by git;
+  - the configuration: training's settings are the constants at the top of
+    `training/train.py` (the notebook's constants cell); the service's settings are in
+    `config.py` (Stage 2).
+
+**What we checked, and what we saw · ما تحققنا منه وما رأيناه**
+- The golden check, in
+  [this run](https://github.com/aaturki/aie113-projects/actions/runs/45390270037): **62 of 62
+  answers the same.**
+  - The 14 rows of the threshold table on the validation payments (at 0.4: 51 alerts, 41
+    frauds), and the chosen threshold, 0.4.
+  - The test counts, exactly: 65 alerts, 56 frauds caught, 9 false alarms, 19 missed. The
+    average precision: 0.7887 (the notebook prints 0.789).
+  - Three payments the notebook explained: its last cell, the first fraud caught in the test
+    period, and the first false alarm. For each: the score, the top three reasons in order, and
+    each reason's numbers.
+  - For example, the last cell scores 0.9989 (notebook 0.999). If V14 were typical, the score
+    would be 0.1486 (notebook 0.149); for V10, 0.2783 (0.278); for V4, 0.9830 (0.983).
+  - The tolerance is half of the last printed digit (0.0005), the most that rounding can hide.
+- All 56,962 test payments were scored a second time through the service's own path (a
+  `Payment`, its `features()`, the bundle). The largest difference from the training path is
+  0.0, with the same 65 alerts. Training and serving build the model's inputs the same way.
+- The domain files import only the standard library and pydantic. The layer tool reports
+  "Contracts: 4 kept, 0 broken".
+- No notebook is needed: `python -m fraud_alerts.training.train` downloads, trains (5.5 s) and
+  compares. The whole job takes under a minute.
+
+Still to do by Turki: open `src/fraud_alerts/domain/policy.py` and find the two thresholds,
+then open the run above and find the line "matches the notebook: True".
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- The numbers came back exactly, not approximately. The library versions are pinned and
+  training uses one thread (`OMP_NUM_THREADS=1`), so the same data gives the same model.
+- A dry run on made-up data shaped like the real file, before the first push, found two
+  bugs:
+  - a division by zero when the amount rule raised no alert;
+  - the model file written before its facts were computed, so a crash would have left half a
+    model.
+
+  Both are fixed.
+- A mistake: the first commit included build files that pip makes (`src/fraud_alerts.egg-info`).
+  The next commit removed them, and git now ignores them.
+- Training runs on GitHub's computer, not the laptop: the data is 150 MB, and Windows Smart App
+  Control blocks some developer tools on this laptop.
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+We split the notebook into drawers with one job each. The rules drawer knows nothing about
+scikit-learn, so swapping the model touches only the adapter drawer, and swapping the web
+framework touches only the API. Before moving anything, we copied every answer the notebook
+printed; after moving, the new code gave the same 62 answers. We chose clean architecture
+because the track's two rules, the threshold and the reasons, must stay true whatever model or
+web framework we use, and the layers let a tool check the import directions on every change.
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- A newer scikit-learn would move these numbers slightly. The golden check would then fail on
+  purpose, and we would write down why before accepting the new answers.
+
+---
+
+## Stage 2: The API · واجهة البرمجة
+
+**What we asked the agent · ما طلبناه من الوكيل**
+Design the request and the response before writing code, then put a versioned FastAPI endpoint
+in front of the service. Show what a wrong or missing field gets back, and explain health
+versus readiness.
+
+**What it built · ما بناه**
+- The routes:
+  - `POST /v1/assess`: one payment in. Out: the fraud score, the decision, both thresholds,
+    the hour the model used, the top three reasons, the model version and a trace id.
+  - `GET /v1/health`: is the process alive?
+  - `GET /v1/ready`: is the model loaded, and with which thresholds?
+  - `/docs`: the contract, with the notebook's last payment as the example.
+- The request (`api/schemas.py`): `timestamp`, `Amount`, `V1` to `V28`.
+  - Amount and the V numbers keep the dataset's names, so a reason names exactly a field that
+    was sent.
+  - A real timestamp replaces the dataset's `Time` (the track README's suggestion): ISO 8601
+    text with a time zone. Its hour is read on the bank's clock (`FRAUD_BANK_TIMEZONE`,
+    Riyadh by default), so the same moment written in two time zones gets the same hour.
+  - Strict. These are refused:
+    - a number sent as text, true or false, NaN or Infinity;
+    - a negative amount;
+    - a missing field or an unknown field;
+    - a timestamp without a time zone.
+- The decision:
+  - **allow** below 0.4.
+  - **review** from 0.4: the model's threshold, the fraud team's rule.
+  - **block** from 0.9: our business rule, in `config.py`. On the validation payments, 38 of
+    the 39 payments scoring 0.9 or more were fraud. Block means "stopped now, and the fraud
+    team is told"; a person still confirms, as the track README requires.
+- One error shape for every failure, which never contains the values that were sent.
+- Settings in one place (`config.py`, read from `FRAUD_` variables). The model loads once, at
+  start-up. Each event is one JSON log line with its trace id, and no payment values.
+- `scripts/smoke.py`: one good, one typical and three bad requests, against any running
+  service.
+
+**One good request and its response** (the real model, in
+[this run](https://github.com/aaturki/aie113-projects/actions/runs/45390270037); numbers rounded
+here, the API sends full precision):
+
+```
+POST /v1/assess        X-Trace-Id: smoke-1
+{"timestamp": "2026-11-24T18:51:18+03:00", "Amount": 1504.93,
+ "V1": -1.6002, "V2": -3.4881, ..., "V28": 0.4778}
+
+200
+{"score": 0.99886, "decision": "block", "review_threshold": 0.4, "block_threshold": 0.9,
+ "hour": 18,
+ "reasons": [{"input": "V14", "value": -6.106, "typical": 0.094, "score_if_typical": 0.1486},
+             {"input": "V10", "value": -4.441, "typical": -0.110, "score_if_typical": 0.2783},
+             {"input": "V4", "value": 3.247, "typical": 0.121, "score_if_typical": 0.9830}],
+ "model_version": "1.0.0", "trace_id": "smoke-1"}
+```
+
+These are the notebook's reasons and numbers for its last cell. A typical payment, with every
+input at its typical value, scored 0.000005: allowed, with no reasons.
+
+**One bad request and its error** (Amount sent as the text "1504.93"):
+
+```
+422
+{"error": {"code": "invalid_request",
+           "message": "The request does not match the contract: see problems, and /docs.",
+           "problems": [{"field": "Amount", "problem": "Input should be a valid number"}]},
+ "trace_id": "9a14318df97747ddb78f8fb969fc0a06"}
+```
+
+It names the field and the problem, never the value sent.
+
+**What the readiness check looks at · ما يفحصه فحص الجاهزية**
+At start-up the service loads the model and its facts from `artifacts/` and checks three
+things:
+1. The model expects the 30 inputs the service sends, in the same order.
+2. The model was saved with the scikit-learn version the service runs.
+3. The thresholds make sense: 0 < review ≤ block ≤ 1.
+
+If any check fails, the service stays up, `/v1/ready` answers 503, and the log says why.
+`/v1/health` only says the process answers. A frozen process fails health and gets
+restarted; a service without its model fails readiness and gets no traffic.
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- The first local run echoed an unknown field named `card_number_4111111111111111` in the
+  error and in the log. Data can hide in a field's name, not only in its value. Unknown names
+  are now shown only if they contain no run of four or more digits. The smoke test checks
+  this, and the pipeline checks that the log holds no payment value.
+- Two defaults were too kind, and both are refused now:
+  - the timestamp accepted a bare number (seconds or milliseconds? in which time zone?);
+  - Python's JSON reader accepts NaN.
+- An allowed payment needs no reasons, so the service skips the 30 extra what-if scores for
+  almost every payment (99.9% of the test payments are allowed).
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+The API is the service's only door. A client sends one payment in a fixed shape and gets back
+a score, a decision and the reasons. Anything that does not match the shape is turned away at
+the door with a clear and safe message, before our code runs. Health says "I am alive";
+readiness says "I have my model and can answer".
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- Which clock gives a payment its hour? The model learned its hours from two days of 2013
+  European data, assuming the file started at midnight. We read the hour on the bank's clock,
+  Riyadh by default. It is a setting, and a real bank would check it against its own data.

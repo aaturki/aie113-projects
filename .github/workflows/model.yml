@@ -30,6 +30,8 @@ jobs:
           path: data/creditcard.csv
           key: creditcard-csv-v1
       - run: pip install -e .
+      - name: Every library the service runs on, at its exact version (Linux, Python 3.12)
+        run: pip freeze --exclude-editable
       - name: Train as the notebook does, then check against the notebook's answers
         run: python -m fraud_alerts.training.train
       - name: A typical payment, from the model's own typical values (made once, then kept)
