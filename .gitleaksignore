@@ -1,0 +1,7 @@
+# Findings of the secret scan that were reviewed and are NOT secrets. One line each, with the
+# reason above it. Anything not listed here still fails the scan.
+
+# 2026-11-24. A public value: the GPG_KEY fingerprint that the official Python base image sets
+# (python.org publishes it for checking Python's releases). Commit f0397cc wrote it into ci.yml
+# as an allowed value; commit 702f546 replaced that check, but the history keeps the line.
+f0397cce96c0b6c181d8db0e2552641c342caf5d:.github/workflows/ci.yml:generic-api-key:125
