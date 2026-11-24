@@ -1,4 +1,4 @@
-# Project journal · سجل المشروع
+# Kashif: project journal · كاشف: سجل المشروع
 
 **Turki Ahmed Alsulayyi (تركي أحمد الصليع)** — Software Engineering Practices for AI Systems
 (ممارسات هندسة البرمجيات لأنظمة الذكاء الاصطناعي), run 22–24 November 2026, SDAIA Academy

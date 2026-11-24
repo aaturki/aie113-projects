@@ -40,9 +40,10 @@ ERRORS: dict[int | str, dict[str, object]] = {
     422: {"model": ErrorResponse, "description": "The request does not match the contract"},
     503: {"model": ErrorResponse, "description": "The model is not loaded"},
 }
-DESCRIPTION = """Scores one card payment for fraud, decides allow, review or block, and explains
-every alert with its top reasons. A teaching service (SDA-AIE-113, SDAIA Academy) trained on
-2013 data: never block a card or accuse anyone without a person checking."""
+DESCRIPTION = """**Kashif** spots card fraud, and says why. It scores one card payment, decides
+allow, review or block, and explains every alert with its top reasons. A teaching service
+(SDA-AIE-113, SDAIA Academy) trained on 2013 data: never block a card or accuse anyone without
+a person checking."""
 
 log = structlog.get_logger()
 
@@ -84,7 +85,7 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
                      alerts_to_fraud_team=notifier is not None)
         yield
 
-    app = FastAPI(title="Fraud alerts", version=API_VERSION, description=DESCRIPTION,
+    app = FastAPI(title="Kashif · كاشف", version=API_VERSION, description=DESCRIPTION,
                   lifespan=lifespan)
     errors.install(app)
 
@@ -150,6 +151,6 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
 
     @app.get("/", include_in_schema=False)
     def root() -> dict[str, str]:
-        return {"service": "fraud alerts", "contract": "/docs", "ready": "/v1/ready"}
+        return {"service": "kashif", "contract": "/docs", "ready": "/v1/ready"}
 
     return app
