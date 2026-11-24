@@ -246,3 +246,83 @@ readiness says "I have my model and can answer".
 - Which clock gives a payment its hour? The model learned its hours from two days of 2013
   European data, assuming the file started at midnight. We read the hour on the bank's clock,
   Riyadh by default. It is a setting, and a real bank would check it against its own data.
+
+---
+
+## Stage 3: The container · الحاوية
+
+**What we asked the agent · ما طلبناه من الوكيل**
+Write a Dockerfile and explain every line. Lock the libraries. Keep the image slim and
+non-root, with no secrets, and a health check on readiness. One command must start it. Then:
+how big is it, what makes up most of it, and where should the model live?
+
+**What it built · ما بناه**
+- `requirements.lock`: all 27 libraries the service runs on, at their exact versions. The
+  image and the training job both install exactly this list, then `pip check` fails if a
+  library is missing. So the model is trained and served on the same libraries.
+- `Dockerfile`, in two stages:
+  - **builder**: installs the locked libraries into a virtual environment;
+  - **runtime**: copies only that environment, then the model, then the code. The rarely
+    changed parts come first, so a code change rebuilds only one small layer.
+
+  The base image is pinned by its digest, with Debian's security fixes applied. The service
+  runs as a normal user (`app`, uid 10001), with no pip and no curl. The health check calls
+  `/v1/ready`, so "healthy" means "model loaded", not just "process running".
+- `.dockerignore`, an allow-list: only the lock, `src/` and the model reach the build. A
+  `.env` file, a key or the data can never be packed by mistake.
+- `compose.yaml`: `docker compose up --build --wait` starts it. The service runs read-only,
+  with no Linux capabilities and no way to gain privileges.
+- `ci.yml` (replacing `model.yml`): the model job hands the model it checked to an image job.
+  The image job builds, measures, rebuilds after a one-line change, starts the service with
+  compose, waits for "healthy", runs the smoke test through the container, and checks what is
+  inside.
+
+Docker is not installed on this laptop, so the image is built and run on GitHub's computer.
+Every number below comes from
+[this run](https://github.com/aaturki/aie113-projects/actions/runs/45391778041).
+
+**What we checked, and what we saw · ما تحققنا منه وما رأيناه**
+
+| Question | Answer |
+|---|---|
+| Image size | 165 MB to download. The libraries are 383 MB of it unpacked: scipy 109 MB, pandas 81 MB, numpy 66 MB, scikit-learn 49 MB. The model is 0.6 MB and our code 0.1 MB. |
+| Build time, nothing cached | 33.2 s |
+| Rebuild after a one-line code change | 0.22 s: Docker reused every step except copying the code |
+| Start to healthy | 6 s |
+| Runs as | `uid=10001(app)`, not root |
+| What else is inside | no pip, no curl, no secret-like variable; its own files are read-only |
+| Through the container | the Stage 2 answers again: block at 0.99886 with V14 first; the typical payment allowed; three bad requests refused |
+
+**Where the model lives · أين يعيش النموذج**
+Inside the image, at `/app/artifacts`. Why:
+- It is 0.6 MB, so the image barely grows.
+- Each image holds exactly one model that passed every check, so the image's tag tells which
+  model is running.
+- Start-up depends on no download and no network.
+- Going back to an old model means running the old image.
+
+The cost: a new model needs a new image, and the pipeline builds one on every change anyway.
+The model is still never in git: the model job trains it on GitHub, compares it with the
+notebook, and hands it to the image job.
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- Our own "no secrets inside" check failed on its first run, on `GPG_KEY`. The official
+  Python base image sets this variable to the **public** fingerprint of the key that signs
+  Python's releases, which python.org publishes. It is not a secret, so the check now allows
+  that one name with exactly that value, and the reason is written next to it. Any other
+  secret-like variable still fails.
+- The first rebuild timing said "0 s": whole seconds were too coarse. In milliseconds it is
+  218 ms.
+- The image is mostly scientific libraries. pandas (81 MB) only hands the model a table, so
+  serving without it would shrink the image. We did not do it: training and serving on
+  exactly the same libraries is worth more to us than 81 MB.
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+The image is a sealed box: the service, its libraries at exact versions, and the model. It is
+packed once and runs the same on any computer. It runs as a normal user, cannot change its
+own files, and says it is healthy only when the model is loaded. Because the libraries are
+packed before the code, changing a line of code repacks in a fraction of a second.
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- Turki has not yet run the image on his own machine. On any machine with Docker: put the
+  model in `artifacts/` (see the README), then run `docker compose up --build --wait`.
