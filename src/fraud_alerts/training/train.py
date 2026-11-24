@@ -45,7 +45,7 @@ GATE_PRECISION = 0.80     # agreed: at least 80% of its test alerts must be real
 
 def fit(train: pd.DataFrame) -> HistGradientBoostingClassifier:
     """The notebook's model, with the notebook's settings."""
-    model = HistGradientBoostingClassifier(learning_rate=0.05, max_iter=300, max_leaf_nodes=15,
+    model = HistGradientBoostingClassifier(learning_rate=0.05, max_iter=30, max_leaf_nodes=15,
                                            l2_regularization=1.0, early_stopping=False,
                                            random_state=RANDOM_SEED)
     return model.fit(train[list(FEATURES)], train["Class"])
