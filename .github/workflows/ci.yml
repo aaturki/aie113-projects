@@ -79,14 +79,16 @@ jobs:
           path: artifacts/
       - name: Build the image (nothing cached yet)
         run: |
-          start=$(date +%s)
+          start=$(date +%s%N)
           docker build --tag fraud-alerts:dev --build-arg GIT_SHA=${{ github.sha }} .
-          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+          echo "BUILD_MS=$(( ($(date +%s%N) - start) / 1000000 ))" >> "$GITHUB_ENV"
       - name: How big is it, and what makes up most of it?
         run: |
+          docker image ls fraud-alerts:dev
           bytes=$(docker image inspect fraud-alerts:dev --format '{{.Size}}')
-          echo "image size: $((bytes / 1000 / 1000)) MB" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "--- the layers, newest first"
+          echo "image size: $((bytes / 1000 / 1000)) MB to download (compressed)" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "--- the layers, newest first (sizes unpacked)"
           docker history fraud-alerts:dev --format '{{.Size}}\t{{.CreatedBy}}' | cut -c1-120 | head -14
           echo "--- the biggest libraries"
           docker run --rm --entrypoint sh fraud-alerts:dev -c \
@@ -94,9 +96,12 @@ jobs:
       - name: Change one line of code and build again
         run: |
           echo "# one changed line" >> src/fraud_alerts/api/app.py
-          start=$(date +%s)
-          docker build --tag fraud-alerts:rebuilt .
-          echo "first build ${BUILD_SECONDS} s; rebuild after a one-line change $(( $(date +%s) - start )) s" \
+          start=$(date +%s%N)
+          docker build --progress=plain --tag fraud-alerts:rebuilt . 2> rebuild.log
+          ms=$(( ($(date +%s%N) - start) / 1000000 ))
+          echo "--- the steps Docker reused from its cache, and the ones it redid"
+          grep -E '^#[0-9]+ (CACHED|\[runtime|\[builder)' rebuild.log | sort -u
+          echo "first build ${BUILD_MS} ms; rebuild after a one-line change ${ms} ms" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- src/fraud_alerts/api/app.py
       - name: One command starts it; wait until the container reports healthy
@@ -113,7 +118,12 @@ jobs:
           docker compose exec -T fraud-alerts sh -c '! command -v pip && ! command -v curl' \
             && echo "no pip and no curl inside"
           docker compose exec -T fraud-alerts ls /app /app/artifacts
-          if docker compose exec -T fraud-alerts env | grep -i -E 'token|secret|password|key='; then
+          # One reviewed exception: GPG_KEY comes from the official Python base image. It is the
+          # PUBLIC fingerprint of the key that signs Python's releases (python.org publishes
+          # it), so it is allowed with exactly this value and no other.
+          if docker compose exec -T fraud-alerts env \
+              | grep -v -x 'GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305' \
+              | grep -i -E 'token|secret|password|key='; then
             echo "::error::A secret-like variable is inside the container."
             exit 1
           fi
