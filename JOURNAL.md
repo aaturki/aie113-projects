@@ -448,3 +448,98 @@ line of code "works", and only these tests would see it.
 **Open questions · أسئلة ما زالت مفتوحة**
 - The test period has only 75 frauds, so the quality floor moves by more than one point per
   fraud. A bigger reference set would make it steadier.
+
+---
+
+## Stage 5: The pipeline · خط التشغيل الآلي
+
+**What we asked the agent · ما طلبناه من الوكيل**
+Write a GitHub Actions workflow with lint, test, image build, smoke test and publish, and
+explain each job and when it runs. Give every job the fewest permissions it needs. Switch on
+branch protection for main. Then open a pull request with a deliberate mistake and watch the
+merge get blocked.
+
+**What it built · ما بناه**
+`.github/workflows/ci.yml` runs on every push to main and on every pull request. Times are
+from [this run on main](https://github.com/aaturki/aie113-projects/actions/runs/45396089859):
+
+| Job | What it checks | Waits for | Time |
+|---|---|---|---|
+| secrets | Gitleaks over every commit ever made: a deleted secret still lives in the history | nothing | 11 s |
+| lint | ruff (style and simple mistakes), mypy in strict mode (types), lint-imports (the layer rules) | nothing | 49 s |
+| test | the 80 fast tests; coverage must stay at least 95% | nothing | 32 s |
+| model | trains on the real data; the 62 notebook answers; the 24 model and data tests; the smoke test on the fresh model | nothing | 56 s |
+| image | build, size, rebuild time, start with compose until healthy, smoke test through the container, not root, nothing extra inside, then Trivy: a HIGH or CRITICAL vulnerability with a fix, or a secret, in the image fails | model | 1 min 20 s |
+| publish | pushes the image to GitHub's registry, tagged with the commit and `main`, with a signed record of how it was built | all five; main only | 1 min 12 s |
+
+The first four jobs run side by side, so a full run takes about three and a half minutes.
+
+- **Permissions.** Every job may only read the code (`contents: read`). Only publish may
+  write packages and ask for an OIDC identity. OIDC means GitHub vouches for the workflow
+  with a short-lived token, which signs the build record, so no signing key is stored
+  anywhere.
+- **Pinned actions.** Every action is pinned to a commit SHA, not to a tag that could be
+  moved to other code.
+- **No secret in any workflow file.** The registry login uses the job's own short-lived
+  `GITHUB_TOKEN`.
+
+**Branch protection on main.** It was set through GitHub's API. In the website it is
+Settings → Branches → Add branch protection rule → `main`. The rules:
+- every change arrives through a pull request;
+- the five checks (secrets, lint, test, model, image) must pass, on a branch that is up to
+  date with main;
+- the rules apply to admins too, so Turki cannot push around them;
+- history stays linear: no force-push, no deletion.
+
+**What we checked, and what we saw · ما تحققنا منه وما رأيناه**
+- **The blocked pull request.**
+  [Pull request #1](https://github.com/aaturki/aie113-projects/pull/1) changed one number in
+  `training/train.py`: 300 trees became 30, "ten times faster". Every line of code still ran,
+  and lint, test and secrets all passed. The model job stopped it:
+
+  ```
+  chosen threshold: 0.8
+  test: {"alerts": 56, "frauds_caught": 51, "precision": 0.9107, "recall": 0.68, ...}
+  FAILED the quality gates (recall >= 0.7, precision >= 0.8): the model is not saved
+  ```
+
+  The image job never ran. GitHub reported the merge state as BLOCKED: "Some checks were not
+  successful", and the merge button was disabled.
+
+  ![The blocked pull request](docs/blocked-pr.png)
+
+  Then a second commit in the same pull request put back the notebook's 300 trees. Every check
+  passed again, and the pull request was merged. The mistake and its fix both stay in the
+  history.
+- **The image's address:** `ghcr.io/aaturki/aie113-projects:<commit>`, and
+  `ghcr.io/aaturki/aie113-projects:main` for the newest. For example
+  `ghcr.io/aaturki/aie113-projects:7d8949a164e3a899e81a7892dfccbb5d4d766fe9`, digest
+  `sha256:2dc9e357dae4ba9cafb198c45b25ede5e2b6bcddda317d7bb27afabfe30847fe`. GitHub holds one
+  signed build record for that digest. Anyone can check it with
+  `gh attestation verify oci://ghcr.io/aaturki/aie113-projects:<commit> --owner aaturki`.
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- The weaker model looked better on one number. With 30 trees, 91% of its alerts were real
+  fraud, more than the real model's 86%. But it caught only 68% of the frauds. The agreed
+  gate (catch at least 70%) is what stopped it. Judging a model by a single number would
+  have let it through.
+- No code check could have seen this mistake. Only the job that trains and measures the
+  model could.
+- The first run of the history scan failed on our own line: the `GPG_KEY` value we had
+  allowed in Stage 3 looks like a key to the scanner. It is public, so:
+  - `.gitleaksignore` lists exactly that one finding, with the reason;
+  - the image check was rewritten to compare with the base image instead of naming the
+    value.
+
+  We did not rewrite history or switch the scan off: any other finding still fails.
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+The pipeline is a checklist that runs on every change, and people forget steps but it never
+does. Secrets, style, fast tests and the model run side by side. The image is built only from
+a model that passed, and it is published only from main, after everything is green. Main is
+locked: a change can only arrive through a pull request whose checks all passed. We proved it
+with a deliberate mistake that every code check missed and the model check caught.
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- Turki should check whether the image's package page on GitHub is public or private. If it
+  is private, pulling the image needs a GitHub login.
