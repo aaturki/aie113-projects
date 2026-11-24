@@ -1,56 +1,143 @@
-# SDA-AIE-113 group projects
+# Fraud alerts with reasons · تنبيهات الاحتيال مع أسبابها
 
-The final project of **SDA-AIE-113 · Software Engineering Practices for AI Systems**
-(SDAIA Academy). Your group takes a real data-science notebook and, with an AI coding agent,
-turns it into a production-style AI service. You do not write code by hand. **You decide, you
-check, and you understand.** Understanding the process is full marks.
+[![ci](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml)
 
-Workshop site: https://aie113.ibrahimalshehri.sa · [بالعربية](#بالعربية)
+The final project of **SDA-AIE-113 · Software Engineering Practices for AI Systems** (SDAIA
+Academy), fraud track. Turki built it alone (the workshop allows groups of any size), with
+Claude Code as the coding agent. It starts from the workshop's starter repository
+([snow10100/aie113-projects](https://github.com/snow10100/aie113-projects)), keeping only the
+fraud track, and follows [GUIDE.md](GUIDE.md) stage by stage. **[JOURNAL.md](JOURNAL.md)**
+holds one entry per stage: what we asked, what was built, what we checked and saw, and what
+went wrong.
 
-## The three tracks
+## What it does
 
-Every track uses real data, and every model explains its answers.
+One card payment goes in. Out come:
+- a **fraud score** from 0 to 1;
+- a **decision**:
+  - **allow**, below 0.4;
+  - **review**, from 0.4: the fraud team checks it;
+  - **block**, from 0.9: the payment is stopped now and the fraud team is told;
+- the **top three reasons**, for example "if V14 were typical, the score would fall from
+  0.999 to 0.149".
 
-| Track | The model | Open the notebook |
+It is a teaching service trained on two days of 2013 data. Never use it to block a card or
+accuse anyone without a person checking.
+
+On the 56,962 test payments it never learned from, it caught 56 of the 75 frauds (75%), and
+86% of its alerts were real fraud, with 9 honest payments flagged. Always answering "not
+fraud" scores 99.87% accuracy and catches nothing, which is why accuracy is not the measure.
+The reorganised code reproduces all 62 answers saved in the workshop's notebook.
+
+## Where each stage lives
+
+| Stage | What | Where |
 |---|---|---|
-| [**Stocks**](tracks/stocks/) | Forecasts tomorrow's closing price of a Saudi stock from real market data, and shows which recent signals drove the forecast. A teaching example, not investment advice. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/snow10100/aie113-projects/blob/main/tracks/stocks/notebook.ipynb) |
-| [**Fraud**](tracks/fraud/) | Flags card transactions that look like fraud, trained on real anonymised bank transactions, and gives the top reasons behind each alert. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/snow10100/aie113-projects/blob/main/tracks/fraud/notebook.ipynb) |
-| [**Vision**](tracks/vision/) | Spots disease on bean leaves in real field photos with a published model, and shows which part of the leaf it looked at. | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/snow10100/aie113-projects/blob/main/tracks/vision/notebook.ipynb) |
+| 0 | The track and the model | [tracks/fraud/](tracks/fraud/), the notebook and its README |
+| 1 | Clean architecture, and the notebook's answers kept | [src/fraud_alerts/](src/fraud_alerts/), [golden/notebook_answers.json](golden/notebook_answers.json) |
+| 2 | The API (FastAPI) | [src/fraud_alerts/api/](src/fraud_alerts/api/), [payloads/](payloads/) |
+| 3 | The container | [Dockerfile](Dockerfile), [compose.yaml](compose.yaml), [requirements.lock](requirements.lock) |
+| 4 | The tests | [tests/](tests/), [scripts/smoke.py](scripts/smoke.py) |
+| 5 | The pipeline, and branch protection | [.github/workflows/ci.yml](.github/workflows/ci.yml), [docs/blocked-pr.png](docs/blocked-pr.png) |
+| 6 | Secrets | [config.py](src/fraud_alerts/config.py), [adapters/webhook.py](src/fraud_alerts/adapters/webhook.py), [compose.smoke.yaml](compose.smoke.yaml), [.pre-commit-config.yaml](.pre-commit-config.yaml), [docs/INCIDENT.md](docs/INCIDENT.md) |
 
-Each track's README explains its model in plain words, for people who have never seen machine
-learning.
+## The layers
 
-## The journey
+```
+src/fraud_alerts/
+  domain/     a payment, the allow/review/block rule, the reasons rule (no ML, no web)
+  service/    the use case "assess one payment" and "announce a block"; what it needs (protocols)
+  adapters/   the tools: the scikit-learn model bundle, the fraud team's webhook
+  api/        the web entry point (FastAPI): contract, errors, logs, wiring
+  config.py   every setting, read from FRAUD_ variables or secret files
+  training/   the notebook's steps as a script, outside the layers, like the notebook
+```
 
-**0** Meet your model → **1** Reorganise it (clean architecture) → **2** Put an API in front of it
-(FastAPI) → **3** Put it in a container (Docker) → **4** Test it → **5** Automate it (GitHub
-Actions) → **6** Handle secrets the modern way → *optional:* a front end with Vite and React.
+Imports only point inward (api → adapters → service → domain). A tool, `lint-imports`,
+checks that on every change.
 
-[**GUIDE.md**](GUIDE.md) explains each stage: the idea, what to ask your agent, how to see for
-yourself what it built, and when the stage is done. No code to copy: your agent writes the code,
-the guide makes sure you understand it.
+## Run it
 
-## How to start
+You need Python 3.12; Docker is optional. These commands are for Windows PowerShell; on Linux
+or macOS, activate with `source .venv/bin/activate` and use `export` instead of `$env:`.
 
-1. **Form a group** of any size. At least one member needs an AI coding agent backed by a
-   frontier model (for example Claude Code, GitHub Copilot in agent mode, Cursor, Codex or
-   Gemini CLI).
-2. **Pick a track** and run its notebook in Colab, top to bottom.
-3. **Make your group's repository**: fork this one (or download it), then ask your agent to keep
-   only your track. `AGENTS.md` tells every common coding agent to explain each step to you as
-   it works.
-4. **Follow [GUIDE.md](GUIDE.md)** stage by stage, and keep [JOURNAL.md](JOURNAL.md): one entry
-   per stage.
+```powershell
+python -m venv .venv; .venv\Scripts\activate
+pip install --no-deps -r requirements.lock      # the exact libraries the image runs
+pip install -e ".[dev]"                         # the project and its tools
+```
 
-A first sentence for your agent:
+**The model** is never stored in git. Choose one:
+- Train it yourself. The first run downloads the 150 MB data, then trains and compares every
+  answer with the notebook:
 
-    Read AGENTS.md, GUIDE.md and tracks/<track>/README.md. Explain our model to us in plain words,
-    then guide us through Stage 1 one step at a time.
+  ```powershell
+  $env:OMP_NUM_THREADS = "1"
+  python -m fraud_alerts.training.train
+  ```
 
-## What you hand in
+- Or take the `model` artifact from the latest green
+  [pipeline run](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml) and unzip
+  it into `artifacts/`.
 
-Your repository, your journal, and a short walkthrough where any member can explain any stage.
-Code quality, speed and the front end are not graded.
+**Serve and try it:**
+
+```powershell
+python -m uvicorn fraud_alerts.api.app:create_app --factory --port 8000
+```
+
+Open http://localhost:8000/docs for the contract, or run, in a second window:
+
+```powershell
+curl.exe -s localhost:8000/v1/assess -H "content-type: application/json" -d "@payloads/flagged.json"
+```
+
+```powershell
+python scripts/smoke.py http://localhost:8000
+```
+
+**Tests:** `python -m pytest -m "unit or integration"` runs the fast tests, in seconds, with a
+stand-in model. `python -m pytest -m "model or data"` needs the trained model and the data.
+
+**Container:** with the model in `artifacts/`, run `docker compose up --build --wait`. Or pull
+the published image, `ghcr.io/aaturki/aie113-projects:main`.
+
+## The pipeline
+
+Every pull request and every push to main runs [ci.yml](.github/workflows/ci.yml):
+
+| Job | What it does |
+|---|---|
+| secrets | gitleaks over every commit ever made |
+| pre-commit | the developers' hooks, and a drill: a fake token must be stopped |
+| lint | ruff, mypy in strict mode, and the layer rules |
+| test | the fast tests, coverage at least 95% |
+| model | trains on the real data and checks the notebook's 62 answers, the model and data tests, and a smoke test |
+| image | builds the image, starts it with a pretend fraud team, runs the smoke test, and checks the image (not root, no secrets, Trivy) |
+| publish | main only: pushes the image to GitHub's registry with a signed build record (OIDC, no stored key) |
+
+`main` is protected. Changes arrive by pull request only, the first six jobs must pass, and
+the rules apply to admins too. Pull request #1 shows a deliberately weaker model being stopped.
+
+## The secret
+
+The fraud team's webhook token is a typed secret (`SecretStr`). It is read from the file
+`/run/secrets/fraud_alert_webhook_token`, used in exactly one place, and masked in every log
+line. The pipeline proves the whole path with a token made for one run only, and checks that
+it is in no log, no environment variable and not in the image. Secret scanning runs before
+each commit, in the pipeline and on GitHub (push protection). If the token ever leaks, follow
+[docs/INCIDENT.md](docs/INCIDENT.md).
+
+## Limits
+
+- **Old, narrow data.** The data covers two days, one card issuer, in 2013, and the V1 to V28
+  inputs exist only in this dataset.
+- **It misses some fraud.** About one fraud in four gets through.
+- **The score is a ranking, not a promise.** 0.9 means "more suspicious than 0.5", not
+  "90% sure".
+- **The reasons name anonymous inputs.** They are honest, but mean nothing to a customer.
+- **The hour is an assumption.** A payment's hour is read on the bank's clock, Riyadh by
+  default: the model learned "night" from data that is only assumed to start at midnight.
 
 ---
 
@@ -58,54 +145,20 @@ Code quality, speed and the front end are not graded.
 
 ## بالعربية
 
-المشروع الختامي لورشة **ممارسات هندسة البرمجيات لأنظمة الذكاء الاصطناعي (SDA-AIE-113)** في
-أكاديمية سدايا. تبدأ مجموعتك من دفتر (notebook) حقيقي لعالِم بيانات، وتحوّله بمساعدة وكيل
-برمجة ذكي إلى خدمة ذكاء اصطناعي بمعايير الإنتاج. لن تكتبوا الكود بأيديكم: **أنتم تقررون،
-وتتحققون، وتفهمون.** فهم العملية يعني الدرجة الكاملة.
+مشروع التخرج لورشة **ممارسات هندسة البرمجيات لأنظمة الذكاء الاصطناعي (SDA-AIE-113)** في أكاديمية
+سدايا، مسار الاحتيال. أنجزه تركي منفردًا بمساعدة وكيل البرمجة Claude Code.
 
-### المسارات الثلاثة
+تدخل عملية بطاقة واحدة، فتخرج **درجة احتيال** من 0 إلى 1، و**قرار**:
+- **سماح** تحت 0.4؛
+- **مراجعة** من 0.4، يتحقق منها فريق الاحتيال؛
+- **إيقاف** من 0.9، تتوقف العملية فورًا ويُبلَّغ الفريق.
 
-كل مسار يستخدم بيانات حقيقية، وكل نموذج يشرح إجاباته:
+ومعه **أهم ثلاثة أسباب** للتنبيه.
 
-- **الأسهم:** يتوقع سعر إغلاق سهم سعودي في يوم التداول التالي من بيانات سوق حقيقية، ويوضح
-  الإشارات التي أثّرت في التوقع. مثال تعليمي وليس نصيحة استثمارية.
-- **الاحتيال:** يرصد عمليات البطاقات المشبوهة، مدرَّب على عمليات بنكية حقيقية مجهولة الهوية،
-  ويذكر أهم أسباب كل تنبيه.
-- **الرؤية الحاسوبية:** يكتشف أمراض أوراق الفاصوليا في صور حقيقية من الحقول بنموذج منشور،
-  ويُظهر الجزء الذي نظر إليه النموذج في الورقة.
+على 56,962 عملية لم يرها النموذج أثناء التعلّم، اكتشف 56 من أصل 75 عملية احتيال، وكانت 86% من
+تنبيهاته احتيالًا حقيقيًا. ويعيد الكود الجديد جميع الإجابات الـ 62 المحفوظة في دفتر الورشة.
 
-يشرح ملف README.ar.md في مجلد كل مسار النموذج بكلمات بسيطة لمن لم يتعامل مع تعلم الآلة من قبل.
-
-### الرحلة
-
-**0** تعرّف على نموذجك ← **1** أعد تنظيمه (المعمارية النظيفة) ← **2** ضع أمامه واجهة برمجية
-(FastAPI) ← **3** ضعه في حاوية (Docker) ← **4** اختبره ← **5** أتمته (GitHub Actions) ← **6**
-تعامل مع الأسرار بالطرق الحديثة ← *اختياري:* واجهة أمامية بـ Vite وReact.
-
-يشرح الدليل [GUIDE.ar.md](GUIDE.ar.md) كل مرحلة: الفكرة، وما تطلبه من وكيلك، وكيف ترى بنفسك
-ما بناه، ومتى تنتهي المرحلة. لا يوجد كود للنسخ: الوكيل يكتب الكود، والدليل يضمن أنك تفهمه.
-
-### كيف تبدأ
-
-1. **كوّنوا مجموعة** بأي عدد. يحتاج عضو واحد على الأقل إلى وكيل برمجة ذكي يعمل بنموذج متقدم
-   (مثل Claude Code أو GitHub Copilot في وضع الوكيل أو Cursor أو Codex أو Gemini CLI).
-2. **اختاروا مسارًا** وشغّلوا دفتره في Colab من أوله إلى آخره (روابط Colab في الجدول أعلاه).
-3. **أنشئوا مستودع المجموعة**: انسخوا هذا المستودع (Fork) أو نزّلوه، ثم اطلبوا من الوكيل
-   الإبقاء على مساركم فقط. الملف AGENTS.md يطلب من وكلاء البرمجة الشائعين شرح كل خطوة لكم.
-4. **اتبعوا الدليل** مرحلة بمرحلة، واكتبوا سجل المشروع JOURNAL.md: مدخل واحد لكل مرحلة.
-
-جملة أولى لوكيلكم:
-
-</div>
-
-    Read AGENTS.md, GUIDE.ar.md and tracks/<track>/README.ar.md. Explain our model to us in plain
-    words, then guide us through Stage 1 one step at a time. Reply in Arabic.
-
-<div dir="rtl" lang="ar">
-
-### ما تسلّمونه
-
-مستودعكم، وسجل المشروع، وعرض قصير يستطيع فيه أي عضو شرح أي مرحلة. جودة الكود والسرعة
-والواجهة الأمامية لا تدخل في التقييم.
+يشرح سجل المشروع [JOURNAL.md](JOURNAL.md) كل مرحلة: ما طلبناه من الوكيل، وما بُني، وكيف تحققنا
+منه، وما تعثرنا فيه.
 
 </div>
