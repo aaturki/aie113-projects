@@ -1,0 +1,14 @@
+# SOPS keeps secrets ENCRYPTED inside this repository, in secrets/*.enc.yaml. Only the holder of
+# one of the private keys matching these public keys can read the values; everyone else sees
+# ENC[...]. The names of the fields stay readable, so a change can still be reviewed.
+#
+# One age public key per holder. Private keys are NEVER committed:
+#   - Turki's is on his laptop, in %APPDATA%\sops\age\keys.txt (sops finds it there);
+#   - the pipeline's is the GitHub Actions secret SOPS_AGE_KEY.
+# To add a member: add their public key here, then run `sops updatekeys secrets/<file>`.
+creation_rules:
+  - path_regex: secrets/.*\.enc\.yaml$
+    key_groups:
+      - age:
+          - age15z72v69cpsct43dx6fy8c3khnmmg2aq9pcp3xdehj2xfcf73hv5qvxdsgn  # Turki
+          - age19sv4kx5y408krnxgtsw9fylxsqkm50chw66z2sskzxzjaj5gkptqmm7a32  # the pipeline
