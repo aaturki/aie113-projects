@@ -106,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_path = download(args.data)
+    digest = sha256(data_path)
     df = load(data_path)
+    print(f"data: {len(df):,} payments, {int(df['Class'].sum())} frauds, sha256 {digest}")
     train, valid, test = split_by_time(df)
     for name, part in (("train", train), ("valid", valid), ("test", test)):
         print(f"{name:5s}: {len(part):7,} payments, {int(part['Class'].sum()):3d} frauds, "
@@ -143,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "threshold_rule": f"lowest tried threshold where at least {MIN_PRECISION:.0%} of "
                           "validation alerts are real fraud",
         "typical_values": {name: float(value) for name, value in typical.items()},
-        "data": {"source": DATA_URL, "sha256": sha256(data_path), "rows": len(df),
+        "data": {"source": DATA_URL, "sha256": digest, "rows": len(df),
                  "frauds": int(df["Class"].sum()), "train_rows": len(train),
                  "train_frauds": int(train["Class"].sum()),
                  "train_hours": [float(train["Time"].min() / 3600),

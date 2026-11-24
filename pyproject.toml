@@ -35,6 +35,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
 testpaths = ["tests"]
+pythonpath = ["tests"]           # so tests can import helpers.py
 markers = [
     "unit: one rule, alone, in milliseconds",
     "integration: the API from the outside, with a stand-in model",
