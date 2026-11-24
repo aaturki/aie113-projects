@@ -57,6 +57,20 @@ class FakeModel:
         return [self.rule(row) for row in rows]
 
 
+class FakeNotifier:
+    """A stand-in fraud team: remembers every announcement it gets."""
+
+    def __init__(self, reached: bool = True) -> None:
+        self.reached = reached
+        self.calls: list[dict[str, Any]] = []
+
+    def payment_blocked(self, trace_id: str, score: float, reasons: Sequence[str],
+                        model_version: str) -> bool:
+        self.calls.append({"trace_id": trace_id, "score": score, "reasons": list(reasons),
+                           "model_version": model_version})
+        return self.reached
+
+
 def request_body(**changes: Any) -> dict[str, Any]:
     """A valid request for a quiet payment, changed by keyword: request_body(V14=-6.0)."""
     body: dict[str, Any] = {"timestamp": "2026-11-24T18:51:18+03:00", "Amount": 25.0,

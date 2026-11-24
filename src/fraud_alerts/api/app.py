@@ -12,10 +12,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from fraud_alerts.adapters.model_bundle import ModelBundle
+from fraud_alerts.adapters.webhook import WebhookNotifier
 from fraud_alerts.api import errors, logs
 from fraud_alerts.api.schemas import (
     Alive,
@@ -28,8 +29,9 @@ from fraud_alerts.api.schemas import (
 )
 from fraud_alerts.config import Settings
 from fraud_alerts.domain.payment import Payment, hour_on_clock
-from fraud_alerts.service.alerts import AlertService
-from fraud_alerts.service.interfaces import FraudModel
+from fraud_alerts.domain.policy import Decision
+from fraud_alerts.service.alerts import AlertService, Assessment
+from fraud_alerts.service.interfaces import BlockNotifier, FraudModel
 
 API_VERSION = "1.0.0"
 TRACE_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -45,10 +47,23 @@ every alert with its top reasons. A teaching service (SDA-AIE-113, SDAIA Academy
 log = structlog.get_logger()
 
 
-def create_app(settings: Settings | None = None, model: FraudModel | None = None) -> FastAPI:
-    """By default the real model is loaded from settings.model_dir; tests pass a stand-in."""
+def tell_fraud_team(service: AlertService, result: Assessment, trace_id: str) -> None:
+    """Runs after the answer has gone back to the client, so the client never waits for the
+    fraud team's webhook."""
+    reached = service.announce(result, trace_id)
+    if reached is not None:
+        log.info("fraud_team_told", reached=reached, trace_id=trace_id)
+
+
+def create_app(settings: Settings | None = None, model: FraudModel | None = None,
+               notifier: BlockNotifier | None = None) -> FastAPI:
+    """By default the real model is loaded from settings.model_dir, and the fraud team's
+    webhook comes from the settings; tests pass stand-ins for both."""
     settings = settings or Settings()
-    logs.configure(settings.log_level)
+    logs.configure(settings.log_level, settings.secret_values())
+    if notifier is None and settings.alert_webhook_url and settings.alert_webhook_token:
+        notifier = WebhookNotifier(url=str(settings.alert_webhook_url),
+                                   token=settings.alert_webhook_token)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -57,14 +72,16 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
         try:
             loaded = model if model is not None else ModelBundle.load(settings.model_dir)
             app.state.service = AlertService(model=loaded,
-                                             block_threshold=settings.block_threshold)
+                                             block_threshold=settings.block_threshold,
+                                             notifier=notifier)
         except Exception as error:  # stay up and say why: /v1/ready answers 503
             log.error("model_not_loaded", error=f"{type(error).__name__}: {error}")
         else:
             log.info("model_loaded", model_version=loaded.version,
                      review_threshold=loaded.review_threshold,
                      block_threshold=settings.block_threshold,
-                     bank_timezone=settings.bank_timezone)
+                     bank_timezone=settings.bank_timezone,
+                     alerts_to_fraud_team=notifier is not None)
         yield
 
     app = FastAPI(title="Fraud alerts", version=API_VERSION, description=DESCRIPTION,
@@ -95,7 +112,8 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
 
     @app.post("/v1/assess", response_model=AssessmentResponse, responses=ERRORS,
               summary="Assess one payment: score, decision and reasons")
-    def assess(body: PaymentRequest, request: Request) -> AssessmentResponse:
+    def assess(body: PaymentRequest, request: Request,
+               background: BackgroundTasks) -> AssessmentResponse:
         service: AlertService | None = request.app.state.service
         if service is None:
             raise HTTPException(status_code=503)
@@ -104,6 +122,8 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
         log.info("assessed", decision=result.decision.value, score=round(result.score, 3),
                  reasons=[reason.input for reason in result.reasons],
                  model_version=result.model_version)
+        if result.decision is Decision.BLOCK:
+            background.add_task(tell_fraud_team, service, result, request.state.trace_id)
         return AssessmentResponse(
             score=result.score, decision=result.decision,
             review_threshold=result.thresholds.review_at,
@@ -125,7 +145,8 @@ def create_app(settings: Settings | None = None, model: FraudModel | None = None
         return Ready(model_version=service.model.version,
                      review_threshold=service.thresholds.review_at,
                      block_threshold=service.thresholds.block_at,
-                     bank_timezone=settings.bank_timezone)
+                     bank_timezone=settings.bank_timezone,
+                     alerts_to_fraud_team=service.notifier is not None)
 
     @app.get("/", include_in_schema=False)
     def root() -> dict[str, str]:

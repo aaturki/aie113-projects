@@ -133,6 +133,8 @@ class Ready(BaseModel):
     review_threshold: float
     block_threshold: float
     bank_timezone: str
+    alerts_to_fraud_team: bool = Field(description="Whether blocked payments are announced to "
+                                                   "the fraud team's webhook (never the token)")
 
 
 class NotReady(BaseModel):
