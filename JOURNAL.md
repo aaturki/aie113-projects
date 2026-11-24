@@ -543,3 +543,134 @@ with a deliberate mistake that every code check missed and the model check caugh
 **Open questions · أسئلة ما زالت مفتوحة**
 - Turki should check whether the image's package page on GitHub is public or private. If it
   is private, pulling the image needs a GitHub login.
+
+---
+
+## Stage 6: Secrets · الأسرار
+
+**What we asked the agent · ما طلبناه من الوكيل**
+Give the project a realistic secret: the track's suggestion, a token for the fraud team's
+alerting webhook, used whenever a payment is blocked. Keep it out of git, the image and the
+logs. Show that the service still gets it when it runs. Add secret scanning before each
+commit and in the pipeline, show it catching a fake key, and write the incident plan.
+
+**What it built · ما بناه**
+- **The alert.** A blocked payment is announced to the fraud team's webhook right after the
+  answer goes back, so the client never waits. The message holds the trace id, the score,
+  the names of the reasons and the model version, never the payment's values. If the webhook
+  is down, the service carries on and the log records "not reached".
+- **Typed settings** (`config.py`). The token is a `SecretStr`, which prints as `**********`.
+  - It is read from the file `/run/secrets/fraud_alert_webhook_token`, where Docker,
+    Kubernetes and secret stores mount secrets. That keeps it out of environment variables,
+    `docker inspect` and crash dumps.
+  - A webhook address without its token, or a token without its address, stops the start.
+- **One place uses it:** the Authorization header in `adapters/webhook.py`. The rule "only
+  blocked payments are announced" lives in the use case (`service/alerts.py`).
+- **Log masking, as a safety net.** In every log line, a field whose name sounds secret, or
+  any occurrence of the token's value, becomes `[hidden]`.
+- **Scanning.**
+  - Before each commit: pre-commit hooks for gitleaks, private keys, large files and ruff.
+  - In the pipeline: a pre-commit job that runs the same hooks, and the secrets job over the
+    whole history.
+  - On GitHub: secret scanning and push protection are on for the repository, so GitHub
+    refuses a push that contains a known kind of key.
+- **The pipeline gets a secret without storing one.** The image job makes a practice token
+  for that run only. It is never committed, it is masked in the run's log, and it is deleted
+  with the runner. The job hands it to the service and to a pretend fraud team
+  (`compose.smoke.yaml`, `scripts/fake_fraud_team.py`) as a secret file.
+- **OIDC instead of stored keys** (Stage 5). The image's build record is signed with a
+  short-lived identity that GitHub vouches for, and every job's `GITHUB_TOKEN` gets only the
+  permissions it needs.
+- `.env.example`: the settings, with no secret. `docs/INCIDENT.md`: the incident plan.
+
+**The path of our secret · مسار السر**
+
+| Where | Who makes it | Where it is kept | How the service gets it |
+|---|---|---|---|
+| Production | The fraud team's system issues it | The platform's secret store | Mounted as `/run/secrets/fraud_alert_webhook_token`, read once at start-up into a `SecretStr` |
+| Pipeline | The image job, fresh for each run | A temporary file only the service's user can read | Mounted into the containers as a compose secret, deleted at the end of the run |
+| Laptop | Whoever tries it | A local file, never `.env`, never git | The same `compose.smoke.yaml` |
+
+In every case the token goes from the file into one header. Logs, the image, the environment
+and git never see it.
+
+**What we checked, and what we saw · ما تحققنا منه وما رأيناه**
+In [this run of pull request #2](https://github.com/aaturki/aie113-projects/actions/runs/45400278129):
+- What reached the pretend fraud team:
+
+  ```
+  [{'authorized': True, 'event': 'payment_blocked', 'trace_id': 'smoke-1', 'score': 0.9989,
+    'reasons': ['V14', 'V10', 'V4'], 'model_version': '1.0.0'}]
+  ```
+
+  The blocked payment arrived once, with the right token, and nothing else arrived: the
+  allowed payment was not announced.
+- The checks after the smoke test:
+
+  ```
+  not in any container's log
+  not in any environment variable: the service reads it from its secret file
+  not in the image: a container started without the secret has no secret file
+  ```
+
+- **The scanner catching a fake key.** The pre-commit job made a random token in GitHub's own
+  format, `ghp_` and 36 characters, and staged it. The secret hook refused it:
+
+  ```
+  Detect hardcoded secrets.....................................Failed
+  Finding:     ...ALERT_WEBHOOK_TOKEN=REDACTED
+  RuleID:      github-pat
+  File:        drill.env
+  leaks found: 1
+  The secret hook stopped the fake token before it could be committed.
+  ```
+
+  The scanner shows it REDACTED, so even the alarm does not leak it.
+- 95 fast tests, still 100% of the service's lines. Among the new tests:
+  - the token never prints;
+  - it can come from a secret file;
+  - the webhook gets the token and no payment values;
+  - a dead webhook breaks nothing;
+  - the log hides secrets;
+  - only blocked payments are announced.
+
+**Our incident plan in five lines · خطة الحادث** (in full in `docs/INCIDENT.md`)
+1. **Revoke first.** The fraud team disables the leaked token and issues a new one, which
+   makes the leaked copy worthless.
+2. **Replace it.** Put the new token in the secret store, restart, and check `/v1/ready` and
+   one test alert.
+3. **Check the damage.** Compare every alert the fraud team received with the old token
+   against our log, by trace id.
+4. **Clean up** where it leaked. Rewriting git history is optional once the token is dead.
+5. **Prevent it.** Find how it got out, and add the check that would have caught it.
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- Not all of the plan could be done by the agent. It was going to set up SOPS with age (see
+  the open questions). That meant creating two private keys: Turki's, saved on this laptop,
+  and the pipeline's, stored as a GitHub secret. The session's safety checks stopped it, and
+  rightly: creating keys and storing credentials is Turki's decision, not the agent's.
+- The pipeline does not need a stored secret at all to prove the path: a token made for one
+  run, then thrown away, tests the same code. Nothing stored means nothing to leak and
+  nothing to rotate.
+- Test files hold made-up tokens. Each one is marked on its own line as made up, for the
+  linter and for gitleaks. We did not switch any rule off.
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+A secret is anything that grants access, here the right to send alerts as our service. It
+never lives in git, in the image or in a log. It reaches the service as a file mounted when
+the container starts, waits in a type that refuses to print itself, and is used in exactly
+one place. Scanners check before every commit and in the pipeline, and GitHub refuses pushes
+with known key types. If it ever leaks, we revoke it first and clean up second.
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- **SOPS with age is not set up.** It would keep a real token encrypted inside the repository,
+  readable only by key holders. To finish it, Turki must create the keys himself or ask the
+  agent to:
+  1. A key pair for Turki, made with `age-keygen`. On this laptop, where Smart App Control
+     blocks it, the agent has a script checked against the standards' test vectors, ready to
+     run once Turki allows it. The private key stays on his machine.
+  2. A second key pair for the pipeline. Its private key is stored as the GitHub secret
+     `SOPS_AGE_KEY`.
+  3. Both public keys go in `.sops.yaml`. Then `sops encrypt` creates the token file that
+     gets committed, and the pipeline decrypts it with `SOPS_AGE_KEY` instead of making a
+     practice token.
