@@ -1,0 +1,131 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read                # the least the jobs need; a job asks for more only if it must
+
+concurrency:
+  group: ci-${{ github.ref }}   # a newer push to the same branch cancels the older run
+  cancel-in-progress: true
+
+# Every action is pinned to a full commit SHA, with its release in a comment: a version tag can
+# be moved to other code, a commit SHA cannot.
+
+jobs:
+  model:
+    # Train exactly as the notebook does, on the real data, and prove the answers are the
+    # notebook's. The data is downloaded here, on GitHub's computer, and never stored in git.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: "1"      # one thread: the same model on every run
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Cache the downloaded data (150 MB, the same file every time)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/creditcard.csv
+          key: creditcard-csv-v1
+      - name: The locked libraries, the same as in the image, then the project
+        run: |
+          pip install --no-deps -r requirements.lock
+          pip install --no-deps -e .
+          pip check
+      - name: Train as the notebook does, then check against the notebook's answers
+        run: python -m fraud_alerts.training.train
+      - name: Start the service on the model just trained, and try it
+        run: |
+          uvicorn fraud_alerts.api.app:create_app --factory --port 8000 --no-access-log \
+            > service.log 2>&1 &
+          python scripts/smoke.py http://127.0.0.1:8000 || { cat service.log; exit 1; }
+          echo "--- the service's log"
+          cat service.log
+          echo "--- nothing the client sent may be in the log"
+          if grep -E '1504\.93|4111111111111111|-6\.1061832734711' service.log; then
+            echo "::error::A payment value or a card-like field name reached the log."
+            exit 1
+          fi
+          echo "no payment values and no card-like field name in the log"
+      - name: Keep the model and its facts for the image
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: model
+          path: artifacts/
+          if-no-files-found: ignore
+
+  image:
+    # Pack the service and the model that just passed every check, then prove the container
+    # starts with one command, reports healthy, answers, and runs as a normal user.
+    needs: model
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: The model the model job made and checked
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: model
+          path: artifacts/
+      - name: Build the image (nothing cached yet)
+        run: |
+          start=$(date +%s)
+          docker build --tag fraud-alerts:dev --build-arg GIT_SHA=${{ github.sha }} .
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+      - name: How big is it, and what makes up most of it?
+        run: |
+          bytes=$(docker image inspect fraud-alerts:dev --format '{{.Size}}')
+          echo "image size: $((bytes / 1000 / 1000)) MB" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "--- the layers, newest first"
+          docker history fraud-alerts:dev --format '{{.Size}}\t{{.CreatedBy}}' | cut -c1-120 | head -14
+          echo "--- the biggest libraries"
+          docker run --rm --entrypoint sh fraud-alerts:dev -c \
+            'du -sh /opt/venv/lib/python3.12/site-packages/* | sort -h | tail -6; du -sh /app/artifacts /app/src'
+      - name: Change one line of code and build again
+        run: |
+          echo "# one changed line" >> src/fraud_alerts/api/app.py
+          start=$(date +%s)
+          docker build --tag fraud-alerts:rebuilt .
+          echo "first build ${BUILD_SECONDS} s; rebuild after a one-line change $(( $(date +%s) - start )) s" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          git checkout -- src/fraud_alerts/api/app.py
+      - name: One command starts it; wait until the container reports healthy
+        run: |
+          start=$(date +%s)
+          docker compose up --no-build --detach --wait --wait-timeout 90
+          echo "healthy after $(( $(date +%s) - start )) s"
+          docker compose ps
+      - name: Smoke test through the container
+        run: python3 scripts/smoke.py http://127.0.0.1:8000
+      - name: Not root, no extra tools, no secrets, cannot change its own files
+        run: |
+          echo "runs as: $(docker compose exec -T fraud-alerts id)"
+          docker compose exec -T fraud-alerts sh -c '! command -v pip && ! command -v curl' \
+            && echo "no pip and no curl inside"
+          docker compose exec -T fraud-alerts ls /app /app/artifacts
+          if docker compose exec -T fraud-alerts env | grep -i -E 'token|secret|password|key='; then
+            echo "::error::A secret-like variable is inside the container."
+            exit 1
+          fi
+          echo "no secret-like variable inside"
+          if docker compose exec -T fraud-alerts sh -c 'touch /app/src/x' 2>/dev/null; then
+            echo "::error::The service can change its own files."
+            exit 1
+          fi
+          echo "its own files are read-only"
+      - name: The container's log
+        if: always()
+        run: docker compose logs --no-color
+      - name: Stop it
+        if: always()
+        run: docker compose down

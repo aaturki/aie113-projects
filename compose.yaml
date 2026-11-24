@@ -1,0 +1,22 @@
+# One command starts the service:   docker compose up --build --wait
+# (the model must be in artifacts/ first: see the README).
+services:
+  fraud-alerts:
+    build: .
+    image: fraud-alerts:dev
+    ports:
+      - "8000:8000"
+    environment:                 # settings, never secrets: see config.py for each one
+      FRAUD_BLOCK_THRESHOLD: "0.9"
+      FRAUD_BANK_TIMEZONE: Asia/Riyadh
+      FRAUD_LOG_LEVEL: INFO
+    # The health check comes from the image (it calls /v1/ready); --wait waits for "healthy".
+    # Least privilege while running: the service never writes its own files, never needs to
+    # become root, and needs no special Linux powers.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

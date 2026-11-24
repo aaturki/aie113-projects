@@ -1,0 +1,10 @@
+# An allow-list: the build sees nothing except what the image needs. A .env file, a key or the
+# 150 MB data can never reach an image by accident, because they are never even sent to Docker.
+*
+!requirements.lock
+!src/
+!artifacts/fraud_model.joblib
+!artifacts/model_info.json
+**/__pycache__
+**/*.pyc
+src/*.egg-info
