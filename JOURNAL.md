@@ -326,3 +326,125 @@ packed before the code, changing a line of code repacks in a fraction of a secon
 **Open questions · أسئلة ما زالت مفتوحة**
 - Turki has not yet run the image on his own machine. On any machine with Docker: put the
   model in `artifacts/` (see the README), then run `docker compose up --build --wait`.
+
+---
+
+## Stage 4: Tests · الاختبارات
+
+**What we asked the agent · ما طلبناه من الوكيل**
+List the tests by level, each in one plain sentence, before writing them. Say which ones
+would catch a model that silently got worse. Break something on purpose and show which test
+catches it. Run everything, and say what is not tested.
+
+**What it built · ما بناه**
+104 tests, plus the golden check that runs inside every training, and the smoke test.
+
+| Level | Where | How many | What they protect |
+|---|---|---|---|
+| Unit | `tests/unit/` | 46 | The rules, alone, with a stand-in model that gives known scores. |
+| Integration | `tests/integration/` | 34 | The API as a client sees it, with the stand-in model. |
+| Model behaviour | `tests/model/test_behaviour.py` | 10 | How the real model behaves. |
+| Golden | `tests/model/test_golden.py`, and `training/golden.py` in every training run | 3, and 62 answers | The notebook's answers. |
+| Quality floor | `tests/model/test_quality.py` | 3 | The agreed minimum on the 56,962 test payments. |
+| Data checks | `tests/data/test_data.py` | 8 | The downloaded file is what we expect. |
+| Smoke | `scripts/smoke.py` | 15 checks | The container really starts and answers. |
+
+The tests in plain words:
+
+- **Unit**
+  - The decision flips exactly at 0.4 and at 0.9.
+  - Thresholds that make no sense, and wrong settings, stop the start.
+  - The hour follows the notebook's rule. The same moment in three time zones has one hour.
+  - The inputs come out in the order the model learned them.
+  - An impossible payment is refused: negative, NaN, hour 24, 27 numbers instead of 28.
+  - Reasons are ranked by how far the score falls, at most three, and only inputs that
+    lower the score.
+  - An allowed payment costs one model call; an alert costs one more batched call of 30
+    what-ifs.
+  - The adapter refuses a model with other inputs, or saved by another scikit-learn.
+- **Integration**
+  - Every kind of bad request is refused with the field named: a number as text, true, NaN,
+    Infinity, a negative or absurd amount, null, a missing field, an unknown field, a
+    timestamp without a time zone or as a bare number, a body that is not a payment, an
+    oversized body.
+  - Errors never repeat the values sent, and a field name that could hold a card number is
+    not repeated.
+  - A crash says nothing about its cause.
+  - Health, readiness, and "not ready" when the model is missing or the thresholds are wrong.
+  - The log holds the decision but no payment value.
+- **Model behaviour**
+  - Making the top reason typical lowers the score.
+  - Every reason names a real input and lowers the score.
+  - The day does not matter, only the hour. The same moment written in UTC gets the same
+    score.
+  - The typical payment is allowed.
+  - The same payment always gets the same score.
+- **Golden**: the notebook's three payments, sent through the API, get the notebook's
+  scores and reasons.
+- **Quality floor**
+  - At least 70% of frauds caught, with at least 80% of alerts real fraud.
+  - Better than both baselines.
+  - Every one of the alerts has a reason that lowers its score.
+- **Data checks**
+  - The exact file (its sha256), the columns, 284,807 rows and 492 frauds.
+  - Nothing missing, and every value inside the limits the API accepts.
+  - No future payment in training.
+  - The hour built by the domain's rule, and the golden rows unchanged.
+
+The fast tests (unit and integration) run on every change, on any laptop. The model and data
+tests need the trained model and the 150 MB data, so they run in the pipeline's model job
+right after training. On a laptop without them they are skipped and the reason is shown. In
+the pipeline (`CI=true`) a missing model or data file fails instead, so these checks cannot
+be switched off there unnoticed.
+
+**What we checked, and what we saw · ما تحققنا منه وما رأيناه**
+- Run times, in
+  [this run](https://github.com/aaturki/aie113-projects/actions/runs/45394070428):
+  - fast suite: 80 passed in 1.03 s (0.92 s on the laptop), covering 100% of the service's
+    lines and branches; the pipeline requires at least 95%;
+  - model and data suite: 24 passed in 3.57 s, after a 5 s training.
+- **The deliberate break.** In `domain/policy.py`, `score >= review_at` became
+  `score > review_at`, so a payment scoring exactly 0.4 would be allowed. One test caught it:
+
+  ```
+  FAILED tests/unit/test_policy.py::test_the_decision_flips_exactly_at_each_threshold[0.4-review]
+  AssertionError: assert <Decision.ALLOW: 'allow'> is <Decision.REVIEW: 'review'>
+   +  where <Decision.ALLOW: 'allow'> = decide(0.4, Thresholds(review_at=0.4, block_at=0.9))
+  1 failed, 79 passed
+  ```
+
+  We undid the change and all 80 passed again. Only the test sitting exactly on the boundary
+  noticed; every other test still passed. That is why boundary tests matter.
+- **Which tests catch a model that silently got worse:**
+  - the golden check (62 answers) in every training;
+  - the golden API tests;
+  - the quality floor, and the baselines test;
+  - "every alert has a reason that lowers its score".
+
+  The fast tests would not catch it, by design: they use a stand-in model, so they test our
+  code.
+- **Not tested by the fast suite:** `training/`. It is checked end to end instead, by the
+  model job on the real data (the golden check and the slow tests). The part that worries us
+  most cannot be tested by code at all: the assumption that the model's hour means the hour on
+  the bank's clock.
+
+**What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
+- The first pipeline run reported 16 model and data tests, not 23. `.gitignore` said `data/`,
+  which hides every folder named `data`, so `tests/data/test_data.py` had never been committed.
+  We noticed only because the count was smaller than expected. Now `/data/` and `/artifacts/`
+  match only the top-level folders.
+- A stand-in model is what keeps the fast tests fast and honest. Its rule is "a low V14 is
+  suspicious", so a test failure always means our code changed, never the model.
+- Starlette warned that its test client now wants `httpx2`. We switched instead of hiding the
+  warning.
+
+**How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
+Two kinds of tests guard two kinds of failure. Fast tests with a pretend model check that our
+code still follows the rules: thresholds, errors, privacy. They run in a second, so we run
+them all the time. Slow tests with the real model and the real data check that the model still
+gives the notebook's answers and still catches enough fraud. A model can be wrong while every
+line of code "works", and only these tests would see it.
+
+**Open questions · أسئلة ما زالت مفتوحة**
+- The test period has only 75 frauds, so the quality floor moves by more than one point per
+  fraud. A bigger reference set would make it steadier.
