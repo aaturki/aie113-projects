@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fraud-alerts"
+version = "1.0.0"
+description = "Card-fraud alerts with reasons: the SDA-AIE-113 fraud track as a service (SDAIA Academy)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # The model file is a pickle: it only loads with the library versions that wrote it, so
+    # training, tests and the image all use these exact versions.
+    "scikit-learn==1.9.1",
+    "numpy==2.5.5",
+    "pandas==3.1.1",
+    "joblib==1.6.0",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3",
+    "fastapi[standard]>=0.115",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov", "httpx", "ruff", "mypy", "import-linter", "pre-commit"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "unit: one rule, alone, in milliseconds",
+    "integration: the API from the outside, with a stand-in model",
+    "model: the real trained model (needs artifacts/ and the data)",
+    "data: the downloaded data is what we expect (needs data/creditcard.csv)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["fraud_alerts"]
+omit = ["*/training/*"]          # training is exercised by the model job, on the real data
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "PT", "RUF", "N", "S", "RET", "PIE"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]            # tests assert
+"src/fraud_alerts/training/*" = ["S310"]   # downloads from one fixed https address
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+ignore_missing_imports = true      # joblib and scikit-learn ship no type stubs
+
+[tool.importlinter]
+root_package = "fraud_alerts"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Clean architecture layers"
+type = "layers"
+layers = [
+    "fraud_alerts.api",
+    "fraud_alerts.adapters",
+    "fraud_alerts.service",
+    "fraud_alerts.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only the adapter and the training code touch the ML stack"
+type = "forbidden"
+source_modules = ["fraud_alerts.domain", "fraud_alerts.service", "fraud_alerts.api"]
+forbidden_modules = ["sklearn", "joblib", "pandas", "numpy"]
+allow_indirect_imports = true    # api reaches the adapter only in the composition root

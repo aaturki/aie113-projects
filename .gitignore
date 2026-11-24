@@ -19,3 +19,7 @@ tracks/*/data/
 *.agekey
 age-key.txt
 keys.txt
+
+# The service's model and data: trained and downloaded by the pipeline, never committed
+artifacts/
+data/
