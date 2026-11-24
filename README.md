@@ -1,12 +1,14 @@
-# Fraud alerts with reasons · تنبيهات الاحتيال مع أسبابها
+# Kashif · كاشف
+
+**Spots card fraud, and says why.** · **يكشف الاحتيال في عمليات البطاقات، ويقول لماذا.**
 
 [![ci](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml)
 
 **Turki Ahmed Alsulayyi (تركي أحمد الصليع)** — Software Engineering Practices for AI Systems, run
 22–24 November 2026, SDAIA Academy (course code SDA-AIE-113).
 
-The course's final project, fraud track, built individually (the workshop allows groups of
-any size) with Claude Code as the coding agent. It starts from the workshop's starter repository
+Kashif is the course's final project, fraud track, built individually (the workshop allows
+groups of any size) with Claude Code as the coding agent. It starts from the workshop's starter repository
 ([snow10100/aie113-projects](https://github.com/snow10100/aie113-projects)), keeping only the
 fraud track, and follows [GUIDE.md](GUIDE.md) stage by stage. **[JOURNAL.md](JOURNAL.md)**
 holds one entry per stage: what we asked, what was built, what we checked and saw, and what
@@ -153,8 +155,8 @@ each commit, in the pipeline and on GitHub (push protection). To replace the tok
 
 ## بالعربية
 
-مشروع التخرج لورشة **ممارسات هندسة البرمجيات لأنظمة الذكاء الاصطناعي (SDA-AIE-113)** في أكاديمية
-سدايا، مسار الاحتيال. أنجزه تركي منفردًا بمساعدة وكيل البرمجة Claude Code.
+**كاشف** هو المشروع الختامي لورشة **ممارسات هندسة البرمجيات لأنظمة الذكاء الاصطناعي (SDA-AIE-113)** في
+أكاديمية سدايا، مسار الاحتيال. أنجزه تركي أحمد الصليع منفردًا بمساعدة وكيل البرمجة Claude Code.
 
 تدخل عملية بطاقة واحدة، فتخرج **درجة احتيال** من 0 إلى 1، و**قرار**:
 - **سماح** تحت 0.4؛

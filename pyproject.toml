@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fraud-alerts"
 version = "1.0.0"
-description = "Card-fraud alerts with reasons: the SDA-AIE-113 fraud track as a service (SDAIA Academy)"
+description = "Kashif: spots card fraud, and says why (SDA-AIE-113 fraud track, SDAIA Academy)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

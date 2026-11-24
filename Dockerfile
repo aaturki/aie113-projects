@@ -37,8 +37,8 @@ COPY artifacts/fraud_model.joblib artifacts/model_info.json /app/artifacts/
 COPY src/ /app/src
 
 ARG GIT_SHA=dev
-LABEL org.opencontainers.image.title="fraud-alerts" \
-      org.opencontainers.image.description="Card-fraud alerts with reasons (SDA-AIE-113 fraud track, SDAIA Academy)" \
+LABEL org.opencontainers.image.title="kashif" \
+      org.opencontainers.image.description="Kashif: spots card fraud, and says why (SDA-AIE-113 fraud track, SDAIA Academy)" \
       org.opencontainers.image.source="https://github.com/aaturki/aie113-projects" \
       org.opencontainers.image.revision=$GIT_SHA
 ENV PATH="/opt/venv/bin:$PATH" \
