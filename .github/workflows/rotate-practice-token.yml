@@ -1,0 +1,45 @@
+name: rotate-practice-token
+
+# Makes a NEW practice webhook token and prints it ENCRYPTED for the keys in .sops.yaml, ready to
+# commit as secrets/alert-webhook.enc.yaml through a pull request. The plain token is never
+# written into the repository, never printed, and gone with the runner.
+#
+# Run it from the Actions tab ("Run workflow"), or:  gh workflow run rotate-practice-token.yml
+# It is also step 2 of docs/INCIDENT.md for the practice token.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOPS_VERSION: v3.13.3
+  SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: sops, pinned by version and checked against its published checksum
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/sops" \
+            "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
+          echo "${SOPS_SHA256}  $RUNNER_TEMP/sops" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/sops"
+      - name: A new practice token, encrypted before it reaches any file in the repository
+        run: |
+          umask 077
+          token="practice_$(openssl rand -hex 24)"
+          echo "::add-mask::$token"
+          plain="$RUNNER_TEMP/plain.yaml"
+          cat > "$plain" <<EOF
+          alert_webhook_token: ${token}
+          about_unencrypted: "A practice token for the pipeline's smoke test, made by the rotate-practice-token workflow on $(date -u +%Y-%m-%d). Fields ending in _unencrypted stay readable."
+          EOF
+          "$RUNNER_TEMP/sops" encrypt --filename-override secrets/alert-webhook.enc.yaml \
+            "$plain" > alert-webhook.enc.yaml
+          rm -f "$plain"
+          echo "----- commit this as secrets/alert-webhook.enc.yaml -----"
+          cat alert-webhook.enc.yaml
