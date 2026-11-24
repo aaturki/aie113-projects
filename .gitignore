@@ -20,9 +20,10 @@ tracks/*/data/
 age-key.txt
 keys.txt
 
-# The service's model and data: trained and downloaded by the pipeline, never committed
-artifacts/
-data/
+# The service's model and data: trained and downloaded by the pipeline, never committed.
+# Anchored with / so they match only the top-level folders, not tests/data/.
+/artifacts/
+/data/
 
 # Made by pip install -e .
 *.egg-info/

@@ -11,6 +11,9 @@ from fraud_alerts.domain.payment import HOURS_PER_DAY, SECONDS_PER_HOUR
 # ULB credit-card fraud data: the original CSV, in the public copy kept for TensorFlow's
 # tutorials (the same data is on OpenML, dataset 1597, if this address ever fails).
 DATA_URL = "https://storage.googleapis.com/download.tensorflow.org/data/creditcard.csv"
+# The fingerprint of the exact file that reproduced all 62 of the notebook's answers. If the
+# copy at DATA_URL ever changes, training stops instead of quietly learning from other data.
+DATA_SHA256 = "76274b691b16a6c49d3f159c883398e03ccd6d1ee12d9d8ee38f4b4b98551a89"
 DEFAULT_PATH = Path("data/creditcard.csv")
 TRAIN_SHARE = 0.6        # the first 60% of the time line: training
 VALID_SHARE = 0.2        # the next 20%: choosing the threshold; the last 20% is the test

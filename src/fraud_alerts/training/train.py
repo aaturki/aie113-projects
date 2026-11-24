@@ -25,6 +25,7 @@ from fraud_alerts.adapters.model_bundle import INFO_FILE, MODEL_FILE
 from fraud_alerts.domain.payment import FEATURES
 from fraud_alerts.training import golden
 from fraud_alerts.training.data import (
+    DATA_SHA256,
     DATA_URL,
     DEFAULT_PATH,
     download,
@@ -103,10 +104,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train the fraud model as the notebook does.")
     parser.add_argument("--data", type=Path, default=DEFAULT_PATH)
     parser.add_argument("--out", type=Path, default=Path("artifacts"))
+    parser.add_argument("--any-data", action="store_true",
+                        help="train even if the data is not the file that reproduced the "
+                             "notebook (for practice runs on other data)")
     args = parser.parse_args(argv)
 
     data_path = download(args.data)
     digest = sha256(data_path)
+    if digest != DATA_SHA256 and not args.any_data:
+        print(f"the data file's sha256 is {digest}, not {DATA_SHA256}: this is not the file "
+              "that reproduced the notebook. Stopping (--any-data trains on it anyway).")
+        return 3
     df = load(data_path)
     print(f"data: {len(df):,} payments, {int(df['Class'].sum())} frauds, sha256 {digest}")
     train, valid, test = split_by_time(df)

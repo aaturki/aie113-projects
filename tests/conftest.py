@@ -39,15 +39,21 @@ def bundle() -> ModelBundle:
 
 
 @pytest.fixture(scope="session")
-def raw_data() -> pd.DataFrame:
+def data_file() -> Path:
     need(DATA_FILE, "python -m fraud_alerts.training.train downloads it (150 MB)")
-    return pd.read_csv(DATA_FILE)
+    return DATA_FILE
 
 
 @pytest.fixture(scope="session")
-def data() -> pd.DataFrame:
-    need(DATA_FILE, "python -m fraud_alerts.training.train downloads it (150 MB)")
-    return load(DATA_FILE)
+def raw_data(data_file: Path) -> pd.DataFrame:
+    """The file exactly as downloaded."""
+    return pd.read_csv(data_file)
+
+
+@pytest.fixture(scope="session")
+def data(data_file: Path) -> pd.DataFrame:
+    """The file as training sees it: sorted by time, with the hour column."""
+    return load(data_file)
 
 
 @pytest.fixture(scope="module")
