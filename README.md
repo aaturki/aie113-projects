@@ -2,9 +2,11 @@
 
 [![ci](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/aaturki/aie113-projects/actions/workflows/ci.yml)
 
-The final project of **SDA-AIE-113 · Software Engineering Practices for AI Systems** (SDAIA
-Academy), fraud track. Turki built it alone (the workshop allows groups of any size), with
-Claude Code as the coding agent. It starts from the workshop's starter repository
+**Turki Ahmed Alsulayyi (تركي أحمد الصليع)** — Software Engineering Practices for AI Systems, run
+22–24 November 2026, SDAIA Academy (course code SDA-AIE-113).
+
+The course's final project, fraud track, built individually (the workshop allows groups of
+any size) with Claude Code as the coding agent. It starts from the workshop's starter repository
 ([snow10100/aie113-projects](https://github.com/snow10100/aie113-projects)), keeping only the
 fraud track, and follows [GUIDE.md](GUIDE.md) stage by stage. **[JOURNAL.md](JOURNAL.md)**
 holds one entry per stage: what we asked, what was built, what we checked and saw, and what
@@ -121,11 +123,17 @@ the rules apply to admins too. Pull request #1 shows a deliberately weaker model
 
 ## The secret
 
-The fraud team's webhook token is a typed secret (`SecretStr`). It is read from the file
+The fraud team's webhook token is kept **encrypted inside the repository** with SOPS and age, in
+[secrets/alert-webhook.enc.yaml](secrets/alert-webhook.enc.yaml). Only two private keys can open
+it, and [.sops.yaml](.sops.yaml) lists their public halves: Turki's, on his laptop, and the
+pipeline's, in the GitHub secret `SOPS_AGE_KEY`.
+
+In the service, the token is a typed secret (`SecretStr`). It is read from the file
 `/run/secrets/fraud_alert_webhook_token`, used in exactly one place, and masked in every log
-line. The pipeline proves the whole path with a token made for one run only, and checks that
-it is in no log, no environment variable and not in the image. Secret scanning runs before
-each commit, in the pipeline and on GitHub (push protection). If the token ever leaks, follow
+line. The pipeline decrypts it with its own key and proves the whole path: it checks that the
+token is in no log, no environment variable and not in the image. Secret scanning runs before
+each commit, in the pipeline and on GitHub (push protection). To replace the token, run the
+`rotate-practice-token` workflow. If a token or a key ever leaks, follow
 [docs/INCIDENT.md](docs/INCIDENT.md).
 
 ## Limits
