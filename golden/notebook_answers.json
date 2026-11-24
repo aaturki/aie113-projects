@@ -1,0 +1,67 @@
+{
+  "source": "tracks/fraud/notebook.ipynb: the answers printed in the notebook's saved outputs (cells 12, 14, 16 and 22), copied before any code was moved",
+  "printed_decimals": {"scores": 3, "input_values": 2},
+  "validation_thresholds": [
+    {"threshold": 0.01, "alerts": 96, "caught": 43},
+    {"threshold": 0.02, "alerts": 78, "caught": 43},
+    {"threshold": 0.05, "alerts": 63, "caught": 42},
+    {"threshold": 0.1, "alerts": 61, "caught": 42},
+    {"threshold": 0.2, "alerts": 53, "caught": 41},
+    {"threshold": 0.3, "alerts": 52, "caught": 41},
+    {"threshold": 0.4, "alerts": 51, "caught": 41},
+    {"threshold": 0.5, "alerts": 50, "caught": 41},
+    {"threshold": 0.6, "alerts": 49, "caught": 40},
+    {"threshold": 0.7, "alerts": 46, "caught": 40},
+    {"threshold": 0.8, "alerts": 43, "caught": 40},
+    {"threshold": 0.9, "alerts": 39, "caught": 38},
+    {"threshold": 0.95, "alerts": 35, "caught": 34},
+    {"threshold": 0.99, "alerts": 23, "caught": 23}
+  ],
+  "chosen_threshold": 0.4,
+  "test": {"alerts": 65, "frauds_caught": 56, "false_alarms": 9, "missed_frauds": 19,
+           "average_precision": 0.789},
+  "payments": [
+    {
+      "name": "last cell",
+      "about": "a new payment, scored the way the service will",
+      "payment": {
+        "Time": 154278.0, "Amount": 1504.93,
+        "V1": -1.60021129907252, "V2": -3.48813018118561, "V3": -6.45930280667571, "V4": 3.24681566349703,
+        "V5": -1.61460769860713, "V6": -1.26037454854632, "V7": 0.288223321921388, "V8": -0.0489639910109505,
+        "V9": -0.734974617920653, "V10": -4.44148408070017, "V11": 2.94437484242405, "V12": -3.80546898374331,
+        "V13": -2.10222683492697, "V14": -6.1061832734711, "V15": -0.641736399701777, "V16": -1.55596289626148,
+        "V17": -2.08406707082134, "V18": 0.394247352869229, "V19": 0.0833797227600835, "V20": 3.18935489592753,
+        "V21": 1.19117480721903, "V22": -0.96714144500067, "V23": -1.46342052446637, "V24": -0.624230851495284,
+        "V25": -0.176461532068143, "V26": 0.400348351070197, "V27": 0.152946864261687, "V28": 0.477774924576796
+      },
+      "score": 0.999,
+      "top_reasons": [
+        {"input": "V14", "value": -6.11, "typical": 0.09, "score_if_typical": 0.149},
+        {"input": "V10", "value": -4.44, "typical": -0.11, "score_if_typical": 0.278},
+        {"input": "V4", "value": 3.25, "typical": 0.12, "score_if_typical": 0.983}
+      ]
+    },
+    {
+      "name": "first caught fraud",
+      "about": "the first real fraud the model flagged in the test period",
+      "row": 229712, "amount": 1.18, "hour": 16, "is_fraud": true,
+      "score": 0.996,
+      "top_reasons": [
+        {"input": "V14", "value": -9.15, "typical": 0.09, "score_if_typical": 0.061},
+        {"input": "V10", "value": -4.06, "typical": -0.11, "score_if_typical": 0.085},
+        {"input": "V4", "value": 6.01, "typical": 0.12, "score_if_typical": 0.944}
+      ]
+    },
+    {
+      "name": "first false alarm",
+      "about": "the first honest payment the model flagged in the test period",
+      "row": 228505, "amount": 0.77, "is_fraud": false,
+      "score": 0.768,
+      "top_reasons": [
+        {"input": "V14", "value": -7.54, "typical": 0.09, "score_if_typical": 0.001},
+        {"input": "V10", "value": -2.85, "typical": -0.11, "score_if_typical": 0.001},
+        {"input": "V4", "value": 3.59, "typical": 0.12, "score_if_typical": 0.428}
+      ]
+    }
+  ]
+}

@@ -3,8 +3,8 @@
     python -m fraud_alerts.training.train --data data/creditcard.csv --out artifacts
 
 The data is downloaded once if it is missing. The model is saved only if it passes the agreed
-quality gates on the test payments. Then the saved model is checked, through the same code the
-service uses, against the answers saved in the notebook for its last payment.
+quality gates on the test payments. Then every answer saved in the notebook is recomputed with
+this project's code (see golden.py) and must be the same.
 """
 import argparse
 import json
@@ -21,9 +21,9 @@ import sklearn
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import average_precision_score
 
-from fraud_alerts.adapters.model_bundle import INFO_FILE, MODEL_FILE, ModelBundle
-from fraud_alerts.domain.payment import FEATURES, V_INPUTS, Payment
-from fraud_alerts.service.alerts import AlertService
+from fraud_alerts.adapters.model_bundle import INFO_FILE, MODEL_FILE
+from fraud_alerts.domain.payment import FEATURES
+from fraud_alerts.training import golden
 from fraud_alerts.training.data import (
     DATA_URL,
     DEFAULT_PATH,
@@ -40,8 +40,6 @@ THRESHOLDS_TO_TRY = (0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0
 AMOUNT_RULE = 1000        # baseline: alert on every payment above this amount
 GATE_RECALL = 0.70        # agreed: the model must catch at least 70% of the test frauds
 GATE_PRECISION = 0.80     # agreed: at least 80% of its test alerts must be real fraud
-GOLDEN_PATH = Path("golden/notebook_last_cell.json")
-NOTEBOOK_TOLERANCE = 0.01  # the notebook rounds to 3 decimals; another library version moves a bit
 
 
 def fit(train: pd.DataFrame) -> HistGradientBoostingClassifier:
@@ -99,32 +97,6 @@ def passes_gates(metrics: dict[str, float | None]) -> bool:
     recall, precision = metrics["recall"], metrics["precision"]
     return (recall is not None and precision is not None
             and recall >= GATE_RECALL and precision >= GATE_PRECISION)
-
-
-def golden_payment() -> tuple[Payment, dict[str, Any]]:
-    golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
-    raw = golden["payment"]
-    payment = Payment(time=raw["Time"], amount=raw["Amount"],
-                      v=tuple(raw[name] for name in V_INPUTS))
-    return payment, golden["notebook_outputs"]
-
-
-def check_against_notebook(folder: Path) -> dict[str, Any]:
-    """Score the notebook's last payment through the service's own code (bundle, service,
-    reasons) and compare with the answers saved in the notebook."""
-    payment, notebook = golden_payment()
-    service = AlertService(model=ModelBundle.load(folder), block_threshold=1.0)
-    result = service.assess(payment)
-    top: list[dict[str, Any]] = [{"input": r.input, "score_if_typical": r.score_if_typical}
-                                 for r in result.reasons]
-    ours: dict[str, Any] = {"score": result.score, "top_reasons": top}
-    same_reasons = [r["input"] for r in top] == [r["input"] for r in notebook["top_reasons"]]
-    deltas = [abs(result.score - notebook["score"])] + [
-        abs(a["score_if_typical"] - b["score_if_typical"])
-        for a, b in zip(top, notebook["top_reasons"], strict=False)]
-    return {"ours": ours, "notebook": notebook, "same_top_reasons_in_order": same_reasons,
-            "largest_difference": max(deltas),
-            "matches": same_reasons and max(deltas) <= NOTEBOOK_TOLERANCE}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,16 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     (args.out / INFO_FILE).write_text(json.dumps(info, indent=2), encoding="utf-8")
     print(f"saved {args.out / MODEL_FILE} and {args.out / INFO_FILE}")
 
-    check = check_against_notebook(args.out)
+    print("the notebook's saved answers, recomputed with this project's code:")
+    check = golden.compare(args.out, df, test, [float(s) for s in test_scores], table,
+                           threshold, metrics)
     (args.out / "notebook_check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
-    print("notebook's last payment, ours vs notebook:")
-    print(f"  score {check['ours']['score']:.4f} vs {check['notebook']['score']}")
-    for ours, theirs in zip(check["ours"]["top_reasons"], check["notebook"]["top_reasons"],
-                            strict=False):
-        print(f"  {ours['input']} -> {ours['score_if_typical']:.4f} vs "
-              f"{theirs['input']} -> {theirs['score_if_typical']}")
-    print(f"matches the notebook: {check['matches']} "
-          f"(largest difference {check['largest_difference']:.4f})")
+    golden.report(check)
     return 0 if check["matches"] else 2
 
 
