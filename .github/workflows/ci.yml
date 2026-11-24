@@ -13,6 +13,10 @@ concurrency:
   group: ci-${{ github.ref }}   # a newer push to the same branch cancels the older run
   cancel-in-progress: true
 
+env:
+  SOPS_VERSION: v3.13.3         # decrypts secrets/*.enc.yaml; checked against its published sha256
+  SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
+
 # Every action is pinned to a full commit SHA, with its release in a comment: a version tag can
 # be moved to other code, a commit SHA cannot.
 #
@@ -33,6 +37,20 @@ jobs:
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             git /repo --redact --no-banner --verbose --exit-code 1
+      - name: Every file in secrets/ is encrypted with SOPS (no plain value in it)
+        run: |
+          for f in secrets/*; do
+            if ! grep -q '^sops:' "$f" || ! grep -q '^    mac: ENC\[' "$f"; then
+              echo "::error::$f is not a SOPS-encrypted file."
+              exit 1
+            fi
+            # Top-level fields must be encrypted, or end in _unencrypted on purpose.
+            if grep -v -E '^[[:space:]]|^sops:|_unencrypted:|: ENC\[' "$f" | grep -q .; then
+              echo "::error::$f has a value that is not encrypted."
+              exit 1
+            fi
+          done
+          echo "every file in secrets/ is encrypted with SOPS: $(ls secrets | xargs)"
 
   pre-commit:
     # The checks every developer runs before each commit, kept honest here: a skipped or
@@ -214,16 +232,35 @@ jobs:
           echo "first build ${BUILD_MS} ms; rebuild after a one-line change ${ms} ms" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- src/fraud_alerts/api/app.py
-      - name: A practice webhook token for this run only, handed over as a file
+      - name: The webhook token, decrypted from the repository with the pipeline's own key
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}   # the pipeline's age private key
         run: |
-          # Made here, never committed, never printed, gone with the runner. add-mask hides it
-          # in this run's log even if a step ever echoed it by mistake.
-          token="practice_$(openssl rand -hex 24)"
-          echo "::add-mask::$token"
+          if [ -z "$SOPS_AGE_KEY" ]; then
+            echo "::error::The pipeline's age key (the secret SOPS_AGE_KEY) is not available."
+            exit 1
+          fi
+          curl -fsSLo "$RUNNER_TEMP/sops" \
+            "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.amd64"
+          echo "${SOPS_SHA256}  $RUNNER_TEMP/sops" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/sops"
+          # The real age tool confirms the pipeline's private key matches the public key that
+          # .sops.yaml names for it.
+          sudo apt-get update --quiet --quiet && sudo apt-get install --yes --quiet --quiet age
+          ours=$(printf '%s\n' "$SOPS_AGE_KEY" | age-keygen -y)
+          if ! grep -q "$ours" .sops.yaml; then
+            echo "::error::The pipeline's key does not match any public key in .sops.yaml."
+            exit 1
+          fi
+          echo "the pipeline's key matches its public key in .sops.yaml: $ours"
           file="$RUNNER_TEMP/fraud_alert_webhook_token"
-          ( umask 077; printf '%s' "$token" > "$file" )
+          ( umask 077
+            "$RUNNER_TEMP/sops" decrypt --extract '["alert_webhook_token"]' \
+              secrets/alert-webhook.enc.yaml > "$file" )
+          echo "::add-mask::$(cat "$file")"   # hidden in this run's log, even by mistake
           sudo chown 10001:10001 "$file"      # readable by the service's user only
           echo "ALERT_TOKEN_FILE=$file" >> "$GITHUB_ENV"
+          echo "decrypted secrets/alert-webhook.enc.yaml into a file only the service can read"
       - name: One command starts it; wait until the container reports healthy
         run: |
           start=$(date +%s)
@@ -285,7 +322,7 @@ jobs:
       - name: The containers' logs
         if: always()
         run: $COMPOSE logs --no-color || true
-      - name: Stop them, and throw the practice token away
+      - name: Stop them, and delete the decrypted token
         if: always()
         run: |
           $COMPOSE down || true

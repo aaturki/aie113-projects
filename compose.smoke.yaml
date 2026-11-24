@@ -1,8 +1,9 @@
-# Adds a pretend fraud team, and hands the practice webhook token to both services as a secret
-# FILE (it appears inside them as /run/secrets/fraud_alert_webhook_token; it is never an
-# environment variable and never part of an image). Used by the pipeline's smoke test:
+# Adds a pretend fraud team, and hands the webhook token to both services as a secret FILE (it
+# appears inside them as /run/secrets/fraud_alert_webhook_token; it is never an environment
+# variable and never part of an image). Used by the pipeline's smoke test. By hand, with an age
+# key that .sops.yaml lists:
 #
-#   printf '%s' "practice_$(openssl rand -hex 24)" > /tmp/alert_token     # a new one each run
+#   sops decrypt --extract '["alert_webhook_token"]' secrets/alert-webhook.enc.yaml > /tmp/alert_token
 #   ALERT_TOKEN_FILE=/tmp/alert_token \
 #     docker compose -f compose.yaml -f compose.smoke.yaml up --build --wait
 services:
