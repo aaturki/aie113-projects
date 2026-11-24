@@ -550,9 +550,11 @@ with a deliberate mistake that every code check missed and the model check caugh
 
 **What we asked the agent · ما طلبناه من الوكيل**
 Give the project a realistic secret: the track's suggestion, a token for the fraud team's
-alerting webhook, used whenever a payment is blocked. Keep it out of git, the image and the
-logs. Show that the service still gets it when it runs. Add secret scanning before each
-commit and in the pipeline, show it catching a fake key, and write the incident plan.
+alerting webhook, used whenever a payment is blocked. Keep it out of the image and the logs,
+and keep it in git only encrypted (SOPS with age): explain who holds which key, and what is
+committed and what is not. Show that the service still gets it when it runs. Add secret
+scanning before each commit and in the pipeline, show it catching a fake key, and write the
+incident plan.
 
 **What it built · ما بناه**
 - **The alert.** A blocked payment is announced to the fraud team's webhook right after the
@@ -574,10 +576,19 @@ commit and in the pipeline, show it catching a fake key, and write the incident 
     whole history.
   - On GitHub: secret scanning and push protection are on for the repository, so GitHub
     refuses a push that contains a known kind of key.
-- **The pipeline gets a secret without storing one.** The image job makes a practice token
-  for that run only. It is never committed, it is masked in the run's log, and it is deleted
-  with the runner. The job hands it to the service and to a pretend fraud team
-  (`compose.smoke.yaml`, `scripts/fake_fraud_team.py`) as a secret file.
+- **SOPS with age: the token is kept encrypted inside the repository.**
+  `secrets/alert-webhook.enc.yaml` holds it as `ENC[AES256_GCM,...]`. Only two private keys
+  can open it, and `.sops.yaml` lists their public halves:
+  - Turki's private key, on his laptop only;
+  - the pipeline's private key, only in the GitHub secret `SOPS_AGE_KEY`.
+
+  The field names and a short note (`about_unencrypted`) stay readable, so a change can still
+  be reviewed. A hand-run workflow, `rotate-practice-token`, makes a new token and prints only
+  its encrypted form. The secrets job refuses any file in `secrets/` that is not encrypted.
+- **The pipeline reads it with its own key.** The image job decrypts the file with
+  `SOPS_AGE_KEY` into a file only the service's user can read. It hands that file to the
+  service and to a pretend fraud team (`compose.smoke.yaml`, `scripts/fake_fraud_team.py`) as
+  a secret file, and deletes it at the end of the run.
 - **OIDC instead of stored keys** (Stage 5). The image's build record is signed with a
   short-lived identity that GitHub vouches for, and every job's `GITHUB_TOKEN` gets only the
   permissions it needs.
@@ -588,14 +599,45 @@ commit and in the pipeline, show it catching a fake key, and write the incident 
 | Where | Who makes it | Where it is kept | How the service gets it |
 |---|---|---|---|
 | Production | The fraud team's system issues it | The platform's secret store | Mounted as `/run/secrets/fraud_alert_webhook_token`, read once at start-up into a `SecretStr` |
-| Pipeline | The image job, fresh for each run | A temporary file only the service's user can read | Mounted into the containers as a compose secret, deleted at the end of the run |
-| Laptop | Whoever tries it | A local file, never `.env`, never git | The same `compose.smoke.yaml` |
+| Pipeline | The `rotate-practice-token` workflow, which prints only its encrypted form | Committed, encrypted, in `secrets/alert-webhook.enc.yaml` | The image job decrypts it with its own age key into a file only the service's user can read, mounts it into the containers, and deletes it at the end |
+| Laptop | (the same practice token) | The same encrypted file | `sops decrypt` with Turki's own key, into a local file for `compose.smoke.yaml`; never `.env`, never git |
 
-In every case the token goes from the file into one header. Logs, the image, the environment
-and git never see it.
+In every case the token goes from a file into one header. Logs, the image and the environment
+never see it, and git only ever sees it encrypted.
+
+**Who holds which key · من يملك أي مفتاح**
+- **Committed:** the two **public** keys (`.sops.yaml`) and the **encrypted** token.
+- **Never committed:** both private keys, and the plain token.
+- **Turki** holds his private key, on his laptop, in `%APPDATA%\sops\age\keys.txt`, where sops
+  looks for it.
+- **The pipeline** holds its own private key in GitHub's encrypted secrets, masked in every
+  log. Only the image job asks for it.
 
 **What we checked, and what we saw · ما تحققنا منه وما رأيناه**
-In [this run of pull request #2](https://github.com/aaturki/aie113-projects/actions/runs/45400278129):
+- **The committed file is unreadable.**
+  [secrets/alert-webhook.enc.yaml](https://github.com/aaturki/aie113-projects/blob/main/secrets/alert-webhook.enc.yaml)
+  holds the token as
+  `alert_webhook_token: ENC[AES256_GCM,data:5DTPB+cwgO9DSRTj...,type:str]`. Even the readable
+  note cannot be changed unnoticed: sops checks a MAC over every value when it decrypts. The
+  [rotation run](https://github.com/aaturki/aie113-projects/actions/runs/45404994940) printed
+  only this encrypted form.
+- **The service still gets it.** In
+  [the run of pull request #5](https://github.com/aaturki/aie113-projects/actions/runs/45405421283):
+
+  ```
+  every file in secrets/ is encrypted with SOPS: alert-webhook.enc.yaml
+  /home/runner/work/_temp/sops: OK
+  the pipeline's key matches its public key in .sops.yaml: age19sv4kx5y408krnxgtsw9fylxsqkm50chw66z2sskzxzjaj5gkptqmm7a32
+  decrypted secrets/alert-webhook.enc.yaml into a file only the service can read
+    ok   with the right token
+  smoke test passed
+  not in any container's log
+  not in any environment variable: the service reads it from its secret file
+  not in the image: a container started without the secret has no secret file
+  ```
+
+In [this run of pull request #2](https://github.com/aaturki/aie113-projects/actions/runs/45400278129),
+before SOPS (with a throwaway token, the same code path):
 - What reached the pretend fraud team:
 
   ```
@@ -645,32 +687,34 @@ In [this run of pull request #2](https://github.com/aaturki/aie113-projects/acti
 5. **Prevent it.** Find how it got out, and add the check that would have caught it.
 
 **What surprised us or went wrong · ما فاجأنا أو ما تعثرنا فيه**
-- Not all of the plan could be done by the agent. It was going to set up SOPS with age (see
-  the open questions). That meant creating two private keys: Turki's, saved on this laptop,
-  and the pipeline's, stored as a GitHub secret. The session's safety checks stopped it, and
-  rightly: creating keys and storing credentials is Turki's decision, not the agent's.
-- The pipeline does not need a stored secret at all to prove the path: a token made for one
-  run, then thrown away, tests the same code. Nothing stored means nothing to leak and
-  nothing to rotate.
+- The agent's first attempt to create the two private keys was stopped by the session's
+  safety checks, and rightly: creating keys and storing credentials is the owner's decision.
+  Turki then agreed, and the keys were made.
+- `age-keygen` cannot run on this laptop (Smart App Control). So the agent made both key pairs
+  with a short script that does the same two steps: an X25519 key pair, written as Bech32
+  text. Before use, it was checked against the official test vectors (RFC 7748 for X25519,
+  BIP 173 for Bech32). Two outside checks confirmed it:
+  - sops accepted both public keys when it encrypted;
+  - in the pipeline, the real `age-keygen` turned the pipeline's private key back into
+    exactly its public key in `.sops.yaml`.
+- Before SOPS, the pipeline proved the same path with a token made for one run and thrown
+  away. The code did not change when the token moved into the encrypted file: only where the
+  file comes from changed.
 - Test files hold made-up tokens. Each one is marked on its own line as made up, for the
   linter and for gitleaks. We did not switch any rule off.
 
 **How we would explain this stage to a colleague · كيف نشرح هذه المرحلة لزميل**
-A secret is anything that grants access, here the right to send alerts as our service. It
-never lives in git, in the image or in a log. It reaches the service as a file mounted when
-the container starts, waits in a type that refuses to print itself, and is used in exactly
-one place. Scanners check before every commit and in the pipeline, and GitHub refuses pushes
-with known key types. If it ever leaks, we revoke it first and clean up second.
+A secret is anything that grants access, here the right to send alerts as our service. Git
+only ever holds it encrypted, readable by just two keys: Turki's and the pipeline's. It is
+never in the image or in a log. It reaches the service as a file mounted when the container
+starts, waits in a type that refuses to print itself, and is used in exactly one place.
+Scanners check before every commit and in the pipeline, and GitHub refuses pushes with known
+key types. If it ever leaks, we revoke it first and clean up second.
 
 **Open questions · أسئلة ما زالت مفتوحة**
-- **SOPS with age is not set up.** It would keep a real token encrypted inside the repository,
-  readable only by key holders. To finish it, Turki must create the keys himself or ask the
-  agent to:
-  1. A key pair for Turki, made with `age-keygen`. On this laptop, where Smart App Control
-     blocks it, the agent has a script checked against the standards' test vectors, ready to
-     run once Turki allows it. The private key stays on his machine.
-  2. A second key pair for the pipeline. Its private key is stored as the GitHub secret
-     `SOPS_AGE_KEY`.
-  3. Both public keys go in `.sops.yaml`. Then `sops encrypt` creates the token file that
-     gets committed, and the pipeline decrypts it with `SOPS_AGE_KEY` instead of making a
-     practice token.
+- sops does not run on this laptop either (Smart App Control), so Turki cannot yet open the
+  file himself. WSL, or another computer with sops and his key file, would let him run
+  `sops decrypt secrets/alert-webhook.enc.yaml`.
+- Turki's private key exists in one place only. If the laptop is lost, the pipeline's key
+  still opens the file; Turki then gets a new key pair, added with `sops updatekeys`. A leaked
+  key is covered in `docs/INCIDENT.md`.
