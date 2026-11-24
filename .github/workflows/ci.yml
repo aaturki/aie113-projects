@@ -32,7 +32,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
-            git /repo --redact --no-banner --exit-code 1
+            git /repo --redact --no-banner --verbose --exit-code 1
 
   lint:
     # Style and simple mistakes, types at every seam, and the layer rules. Seconds.
@@ -207,16 +207,20 @@ jobs:
           docker compose exec -T fraud-alerts sh -c '! command -v pip && ! command -v curl' \
             && echo "no pip and no curl inside"
           docker compose exec -T fraud-alerts ls /app /app/artifacts
-          # One reviewed exception: GPG_KEY comes from the official Python base image. It is the
-          # PUBLIC fingerprint of the key that signs Python's releases (python.org publishes
-          # it), so it is allowed with exactly this value and no other.
-          if docker compose exec -T fraud-alerts env \
-              | grep -v -x 'GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305' \
-              | grep -i -E 'token|secret|password|key='; then
+          # Whatever WE add to the environment must hold no secret. The base image's own
+          # variables are public and fixed by its digest (GPG_KEY among them: the public
+          # fingerprint of the key that signs Python's releases), so they are compared away.
+          base=$(grep -m1 '^ARG PYTHON_IMAGE=' Dockerfile | cut -d= -f2-)
+          docker pull --quiet "$base" > /dev/null
+          docker image inspect "$base" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | sort > base.env
+          docker compose exec -T fraud-alerts env | sort > ours.env
+          echo "variables the image adds or changes: $(comm -13 base.env ours.env | cut -d= -f1 | xargs)"
+          if comm -13 base.env ours.env | grep -i -E 'token|secret|password|key='; then
             echo "::error::A secret-like variable is inside the container."
             exit 1
           fi
-          echo "no secret-like variable inside"
+          echo "no secret-like variable added inside"
           if docker compose exec -T fraud-alerts sh -c 'touch /app/src/x' 2>/dev/null; then
             echo "::error::The service can change its own files."
             exit 1
