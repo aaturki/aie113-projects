@@ -22,5 +22,21 @@ person. In this project that is Turki.
 5. **Stop it happening again.** Find how it got out, then add the check that would have caught
    it: a scanner rule, a test, a log mask. Write down what happened and what changed.
 
-The pipeline's practice token is made fresh for each run and thrown away with the runner, so
-there is nothing to rotate for it.
+## The practice token in this repository
+
+The pipeline's token is a practice value, kept encrypted in `secrets/alert-webhook.enc.yaml`.
+To replace it (step 2): run the `rotate-practice-token` workflow (Actions tab, "Run workflow"),
+then commit the encrypted file it prints, through a pull request.
+
+## If an age private key leaks
+
+An age private key opens every version of `secrets/*.enc.yaml` ever committed for it, including
+the old ones in git history. So:
+
+1. **Rotate what it protects first:** replace the token as above, and ask the fraud team to
+   disable the old one. The old encrypted copies then hold a dead value.
+2. **Shut the key out:** remove its public key from `.sops.yaml`, then run
+   `sops updatekeys secrets/alert-webhook.enc.yaml` and `sops rotate -i
+   secrets/alert-webhook.enc.yaml` (a new data key for the file).
+3. **Give the holder a new key pair.** For the pipeline: make a new pair, put the private key in
+   the GitHub secret `SOPS_AGE_KEY`, and put the public key in `.sops.yaml`.
